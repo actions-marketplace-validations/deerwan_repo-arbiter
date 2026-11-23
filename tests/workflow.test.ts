@@ -10,6 +10,10 @@ describe('action contracts', () => {
     expect(action).toMatch(/dry-run:[\s\S]*default: 'true'/);
   });
 
+  it('uses the CJS bundle as the action entrypoint', () => {
+    expect(action).toContain("main: 'dist/index.cjs'");
+  });
+
   it('declares an issue-number input for manual runs', () => {
     expect(action).toContain('issue-number:');
   });

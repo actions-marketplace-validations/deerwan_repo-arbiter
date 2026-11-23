@@ -1,9 +1,9 @@
 {
   "name": "repo-arbiter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Policy-gated AI triage for GitHub issues and pull requests",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
   "license": "MIT",
   "private": true,
   "engines": {
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "npm run typecheck && esbuild src/index.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/index.js --legal-comments=eof",
+    "build": "npm run typecheck && esbuild src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/index.cjs --legal-comments=eof",
     "check:dist": "node scripts/check-dist.cjs",
     "verify": "npm run typecheck && npm test && npm run build && npm run check:dist"
   },
