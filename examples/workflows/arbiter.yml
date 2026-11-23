@@ -1,0 +1,30 @@
+name: Repo Arbiter
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: repo-arbiter
+  queue: max
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'workflow_dispatch' || github.event.sender.type != 'Bot'
+    steps:
+      - name: Run Repo Arbiter
+        uses: your-org/repo-arbiter@v0.1.0
+        with:
+          dry-run: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARBITER_LLM_API_KEY: ${{ secrets.ARBITER_LLM_API_KEY }}
+          ARBITER_LLM_PROVIDER: openai
+          ARBITER_LLM_MODEL: gpt-4o-mini

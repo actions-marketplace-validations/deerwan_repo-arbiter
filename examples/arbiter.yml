@@ -1,0 +1,48 @@
+enabled: true
+
+operations:
+  allowed:
+    - add_labels
+    - post_comment
+
+labels:
+  prefix: arbiter
+  allowlist:
+    - arbiter/bug
+    - arbiter/feature
+    - arbiter/question
+    - arbiter/docs
+    - arbiter/duplicate
+    - arbiter/invalid
+    - arbiter/security
+    - arbiter/priority-critical
+    - arbiter/priority-high
+    - arbiter/priority-medium
+    - arbiter/priority-low
+    - arbiter/needs-info
+  mapping:
+    bug: [arbiter/bug]
+    feature: [arbiter/feature]
+    question: [arbiter/question]
+    docs: [arbiter/docs]
+    duplicate: [arbiter/duplicate]
+    invalid: [arbiter/invalid]
+    security: [arbiter/security]
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  maxTokens: 1200
+
+security:
+  maxIssueLength: 12000
+
+exclude:
+  labels: []
+  users: []
+
+features:
+  duplicateSearch: true
+  missingInfoCheck: true
+
+maxRuns: 20

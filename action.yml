@@ -1,0 +1,40 @@
+name: 'Repo Arbiter'
+description: 'Policy-gated AI triage for GitHub issues and pull requests'
+author: 'repo-arbiter'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  dry-run:
+    description: 'Preview planned operations without writing to GitHub'
+    required: false
+    default: 'true'
+  config-path:
+    description: 'Path to the repository configuration file on the default branch'
+    required: false
+    default: '.github/arbiter.yml'
+  policy-path:
+    description: 'Optional path to a repository policy text file on the default branch'
+    required: false
+    default: ''
+  issue-number:
+    description: 'Issue number to process for workflow_dispatch runs'
+    required: false
+    default: ''
+
+outputs:
+  plan:
+    description: 'JSON array of planned operations'
+  applied:
+    description: 'JSON array of operations actually applied'
+  dry-run:
+    description: 'Whether this run was a dry run'
+  summary:
+    description: 'Short human-readable summary of the result'
+  failure-class:
+    description: 'Structured failure class when the run failed'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
