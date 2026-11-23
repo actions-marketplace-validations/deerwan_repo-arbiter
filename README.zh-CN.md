@@ -1,5 +1,8 @@
 # Repo Arbiter
 
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Repo%20Arbiter-blue?logo=github)](https://github.com/marketplace/actions/repo-arbiter)
+[![CI](https://github.com/deerwan/repo-arbiter/actions/workflows/ci.yml/badge.svg)](https://github.com/deerwan/repo-arbiter/actions/workflows/ci.yml)
+
 [English](./README.md) | 中文
 
 Repo Arbiter 是一个策略驱动的 GitHub AI 分流工具。核心原则是：**模型只负责提案，确定性代码负责校验和执行，人类保留最终控制权**。

@@ -1,5 +1,8 @@
 # Repo Arbiter
 
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Repo%20Arbiter-blue?logo=github)](https://github.com/marketplace/actions/repo-arbiter)
+[![CI](https://github.com/deerwan/repo-arbiter/actions/workflows/ci.yml/badge.svg)](https://github.com/deerwan/repo-arbiter/actions/workflows/ci.yml)
+
 English | [中文](./README.zh-CN.md)
 
 Policy-gated AI triage for GitHub repositories. The model proposes a decision; deterministic code validates and applies it.
