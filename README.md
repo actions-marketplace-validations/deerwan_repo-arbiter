@@ -17,7 +17,7 @@ Policy-gated AI triage for GitHub repositories. The model proposes a decision; d
 ## Usage
 
 ```yaml
-- uses: your-org/repo-arbiter@v0.1.2
+- uses: your-org/repo-arbiter@v0.1.3
   with:
     dry-run: 'true'
   env:
@@ -26,6 +26,10 @@ Policy-gated AI triage for GitHub repositories. The model proposes a decision; d
     ARBITER_LLM_PROVIDER: openai
     ARBITER_LLM_MODEL: gpt-4o-mini
 ```
+
+## Custom bot identity
+
+By default, comments are posted as `github-actions[bot]`. To post as your own GitHub App, create and install a GitHub App, then pass its installation token through the `github-token` input. See [`examples/workflows/arbiter-github-app.yml`](./examples/workflows/arbiter-github-app.yml) for a complete workflow.
 
 Configuration lives at `.github/arbiter.yml` on the default branch. Missing fields fall back to safe defaults.
 

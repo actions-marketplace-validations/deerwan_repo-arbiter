@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 const action = readFileSync(path.resolve(process.cwd(), 'action.yml'), 'utf8');
 const workflow = readFileSync(path.resolve(process.cwd(), 'examples/workflows/arbiter.yml'), 'utf8');
+const appWorkflow = readFileSync(
+  path.resolve(process.cwd(), 'examples/workflows/arbiter-github-app.yml'),
+  'utf8',
+);
 
 describe('action contracts', () => {
   it('defaults dry-run to true', () => {
@@ -16,6 +20,15 @@ describe('action contracts', () => {
 
   it('declares an issue-number input for manual runs', () => {
     expect(action).toContain('issue-number:');
+  });
+
+  it('declares a github-token input', () => {
+    expect(action).toContain('github-token:');
+  });
+
+  it('shows how to use a GitHub App token for a custom bot identity', () => {
+    expect(appWorkflow).toContain('actions/create-github-app-token@v2');
+    expect(appWorkflow).toContain('github-token: ${{ steps.app-token.outputs.token }}');
   });
 
   it('uses minimal permissions and serial concurrency', () => {

@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: your-org/repo-arbiter@v0.1.2
+      - uses: your-org/repo-arbiter@v0.1.3
         with:
           dry-run: 'true'
         env:
@@ -50,6 +50,10 @@ jobs:
 ```
 
 确认 dry-run 结果符合预期后，再把 `dry-run` 改为 `'false'`。非 dry-run 模式必须提供 `ARBITER_LLM_API_KEY`。
+
+## 自定义 Bot 身份
+
+默认评论作者是 `github-actions[bot]`。如果想让它显示成自己的 GitHub App，需要创建并安装一个 GitHub App，然后把它的 installation token 通过 `github-token` input 传给 Action。完整示例见 [`examples/workflows/arbiter-github-app.yml`](./examples/workflows/arbiter-github-app.yml)。
 
 ## 仓库配置
 
@@ -112,6 +116,7 @@ features:
 
 | 输入 | 默认值 | 说明 |
 |---|---|---|
+| `github-token` | `${{ github.token }}` | 用于 GitHub API；传入 GitHub App token 可自定义 Bot 身份 |
 | `dry-run` | `true` | 只预览计划，不写 GitHub |
 | `config-path` | `.github/arbiter.yml` | 仓库配置文件路径 |
 | `policy-path` | 空 | 可选的策略文本文件路径 |

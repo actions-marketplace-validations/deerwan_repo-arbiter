@@ -31275,8 +31275,8 @@ function optionalEnv(name) {
 }
 function loadRuntimeOptions() {
   const dryRun = parseBoolean(core2.getInput("dry-run") || "true", "dry-run");
-  const githubToken = optionalEnv("GITHUB_TOKEN") ?? "";
-  if (!githubToken) throw new ConfigError("GITHUB_TOKEN is required");
+  const githubToken = core2.getInput("github-token") || optionalEnv("GITHUB_TOKEN") || "";
+  if (!githubToken) throw new ConfigError("github-token input or GITHUB_TOKEN env var is required");
   const llmApiKey = optionalEnv("ARBITER_LLM_API_KEY");
   if (llmApiKey === githubToken) {
     throw new ArbiterFailureError(

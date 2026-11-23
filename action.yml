@@ -6,6 +6,10 @@ branding:
   color: 'blue'
 
 inputs:
+  github-token:
+    description: 'GitHub token for API access; use a GitHub App installation token for a custom bot identity'
+    required: false
+    default: ''
   dry-run:
     description: 'Preview planned operations without writing to GitHub'
     required: false
