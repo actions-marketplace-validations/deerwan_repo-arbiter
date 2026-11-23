@@ -20,6 +20,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: repo-arbiter-${{ github.event.issue.number || inputs.issue-number }}
+  queue: max
+
 jobs:
   dry-run:
     runs-on: ubuntu-latest
@@ -39,6 +43,7 @@ jobs:
         uses: ./
         with:
           github-token: ${{ steps.app-token.outputs.token }}
+          bot-login: ${{ vars.REPO_ARBITER_BOT_LOGIN }}
           dry-run: ${{ inputs.dry-run }}
           issue-number: ${{ inputs.issue-number }}
         env:

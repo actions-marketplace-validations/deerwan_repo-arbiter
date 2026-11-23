@@ -18,4 +18,12 @@ describe('parseAnalysis', () => {
     const raw = JSON.stringify({ ...makeAnalysis(), category: 'unknown' });
     expect(() => parseAnalysis(raw)).toThrow(/analysis schema/i);
   });
+
+  it('rejects unknown policy tokens', () => {
+    const raw = JSON.stringify({
+      ...makeAnalysis(),
+      operations: [{ kind: 'add_labels', authorization: 'POLICY-ROOT' }],
+    });
+    expect(() => parseAnalysis(raw)).toThrow(ArbiterFailureError);
+  });
 });

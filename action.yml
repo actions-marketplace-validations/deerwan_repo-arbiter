@@ -10,6 +10,14 @@ inputs:
     description: 'GitHub token for API access; use a GitHub App installation token for a custom bot identity'
     required: false
     default: ''
+  bot-login:
+    description: 'Login name of the bot account that owns Repo Arbiter comments'
+    required: false
+    default: 'github-actions[bot]'
+  force:
+    description: 'Ignore the fingerprint marker and re-analyze the issue'
+    required: false
+    default: 'false'
   dry-run:
     description: 'Preview planned operations without writing to GitHub'
     required: false

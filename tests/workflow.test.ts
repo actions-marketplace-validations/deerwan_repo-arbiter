@@ -22,8 +22,17 @@ describe('action contracts', () => {
     expect(action).toContain('issue-number:');
   });
 
-  it('declares a github-token input', () => {
+  it('declares custom token, bot identity and force inputs', () => {
     expect(action).toContain('github-token:');
+    expect(action).toContain('bot-login:');
+    expect(action).toContain('force:');
+  });
+
+  it('declares issue-number for workflow_dispatch in both examples', () => {
+    expect(workflow).toContain('issue-number:');
+    expect(workflow).toContain('issue-number: ${{ inputs.issue-number }}');
+    expect(appWorkflow).toContain('issue-number:');
+    expect(appWorkflow).toContain('issue-number: ${{ inputs.issue-number }}');
   });
 
   it('shows how to use a GitHub App token for a custom bot identity', () => {

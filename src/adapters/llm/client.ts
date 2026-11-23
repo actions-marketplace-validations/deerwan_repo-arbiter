@@ -185,7 +185,7 @@ export function createLlmProvider(
       ),
     );
   }
-  if (options.provider === 'mock' || !options.apiKey) {
+  if (options.provider === 'mock') {
     return createMockProvider(options.mockResponse ?? MOCK_ANALYSIS);
   }
   if (options.provider === 'anthropic') return createAnthropicProvider(options, fetchImpl, sleep);

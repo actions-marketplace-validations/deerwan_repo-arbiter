@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
 import { applyPlan, DryRunWriter } from './core/apply.js';
-import { computeFingerprint, extractFingerprints, fingerprintMarker } from './core/idempotency.js';
+import { computeFingerprint, fingerprintMarker, hasFingerprintFrom } from './core/idempotency.js';
 import { parseAnalysis } from './core/parse.js';
 import { explainPlan, preparePlan, renderComment, type PlannedOperation } from './core/plan.js';
 import { buildSystemPrompt, buildUserPrompt } from './core/prompt.js';
@@ -14,10 +14,11 @@ import type { ArbiterConfig } from './config.js';
 import { ConfigError } from './failures.js';
 
 export const SUMMARY_MARKER = '<!-- repo-arbiter:summary:v1 -->';
+export const FAILURE_MARKER = '<!-- repo-arbiter:failure:v1 -->';
 
 interface ArbiterPayload {
   action?: string;
-  issue?: { number?: number };
+  issue?: { number?: number; updated_at?: string };
   repository?: { default_branch?: string };
   sender?: { type?: string; login?: string };
 }
@@ -47,11 +48,19 @@ async function postFailureComment(
   repo: string,
   issueNumber: number,
   githubToken: string,
-  body: string,
+  botLogin: string,
+  failureClass: string,
 ): Promise<void> {
+  const body = [
+    FAILURE_MARKER,
+    '### Arbiter failure',
+    `Failure class: \`${failureClass}\``,
+    '',
+    'Repo Arbiter could not complete this run. Check the workflow logs and the `failure-class` output.',
+  ].join('\n');
   try {
-    const writer = new GithubAdapter(getOctokit(githubToken), owner, repo, issueNumber);
-    await writer.upsertComment(SUMMARY_MARKER, body);
+    const writer = new GithubAdapter(getOctokit(githubToken), owner, repo, issueNumber, botLogin);
+    await writer.upsertComment(FAILURE_MARKER, body);
   } catch (error) {
     core.warning(`Could not post failure comment: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -63,11 +72,13 @@ export async function run(): Promise<void> {
   let repo = '';
   let issueNumber = 0;
   let dryRun = true;
+  let botLogin = 'github-actions[bot]';
 
   try {
     const options = loadRuntimeOptions();
     githubToken = options.githubToken;
     dryRun = options.dryRun;
+    botLogin = options.botLogin;
 
     const payload = context.payload as ArbiterPayload;
     const repoInfo = context.repo;
@@ -77,7 +88,7 @@ export async function run(): Promise<void> {
     const ref = payload.repository?.default_branch ?? 'main';
 
     const octokit = getOctokit(githubToken);
-    const reader = new GithubAdapter(octokit, owner, repo);
+    const reader = new GithubAdapter(octokit, owner, repo, undefined, botLogin);
 
     const config = await loadRepositoryConfig(octokit, owner, repo, options.configPath, ref);
     if (!config.enabled) {
@@ -105,12 +116,17 @@ export async function run(): Promise<void> {
       repo: `${owner}/${repo}`,
       entity: String(issueNumber),
       agent: 'triage',
+      updatedAt: context.eventName === 'issues' ? payload.issue?.updated_at : undefined,
     });
 
-    const comments = await reader.listComments(issueNumber);
-    if (comments.some((comment) => extractFingerprints(comment.body).includes(fingerprint))) {
-      core.info(`Issue #${issueNumber} already processed for this fingerprint.`);
-      return;
+    if (!options.force) {
+      const comments = await reader.listComments(issueNumber);
+      if (hasFingerprintFrom(comments, fingerprint, botLogin)) {
+        core.info(`Issue #${issueNumber} already processed for this fingerprint.`);
+        return;
+      }
+    } else {
+      core.info('force=true: skipping fingerprint check.');
     }
 
     const repoLabels = await reader.listLabels();
@@ -119,8 +135,8 @@ export async function run(): Promise<void> {
       : [];
 
     const providerName = options.llmProvider ?? config.llm.provider;
-    if (!dryRun && !options.llmApiKey && providerName !== 'mock') {
-      throw new ConfigError('ARBITER_LLM_API_KEY is required when dry-run is false');
+    if (!options.llmApiKey && providerName !== 'mock') {
+      throw new ConfigError('ARBITER_LLM_API_KEY is required for non-mock providers');
     }
     if (!dryRun && providerName === 'mock' && process.env.ARBITER_ALLOW_MOCK_APPLY !== 'true') {
       throw new ConfigError('mock provider cannot be used with dry-run=false');
@@ -176,7 +192,7 @@ export async function run(): Promise<void> {
 
     const writer = dryRun
       ? new DryRunWriter()
-      : new GithubAdapter(octokit, owner, repo, issueNumber);
+      : new GithubAdapter(octokit, owner, repo, issueNumber, botLogin);
     const labelDescriptions = Object.fromEntries(
       config.labels.allowlist.map((label) => [label, `Classified by Repo Arbiter (${config.labels.prefix})`]),
     );
@@ -194,19 +210,7 @@ export async function run(): Promise<void> {
     core.setOutput('failure-class', failure.class_name);
     core.setOutput('summary', failure.summary);
     if (!dryRun && owner && repo && issueNumber > 0 && githubToken) {
-      await postFailureComment(
-        owner,
-        repo,
-        issueNumber,
-        githubToken,
-        [
-          SUMMARY_MARKER,
-          '### Arbiter failure',
-          failure.summary,
-          '',
-          failure.fix_markdown,
-        ].join('\n'),
-      );
+      await postFailureComment(owner, repo, issueNumber, githubToken, botLogin, failure.class_name);
     }
     core.setFailed(failure.summary);
   }

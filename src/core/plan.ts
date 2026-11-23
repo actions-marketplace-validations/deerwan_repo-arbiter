@@ -1,17 +1,26 @@
 import type { ArbiterConfig } from '../config.js';
-import type { Analysis, CommentTemplate } from './schema.js';
+import type { Analysis, CommentTemplate, PolicyToken } from './schema.js';
 import { safeInline } from './sanitizer.js';
 
-const POLICY_RE = /^POLICY-[A-Z0-9-]+$/;
+const ALLOWED_TOKENS: Record<'add_labels' | 'post_comment', readonly PolicyToken[]> = {
+  add_labels: ['POLICY-LABEL', 'POLICY-CATEGORY', 'POLICY-PRIORITY'],
+  post_comment: ['POLICY-COMMENT', 'POLICY-DUPLICATE'],
+};
 
 export type PlannedOperation =
-  | { kind: 'add_labels'; labels: string[]; authorization: string }
-  | { kind: 'post_comment'; commentTemplate: CommentTemplate; authorization: string };
+  | { kind: 'add_labels'; labels: string[]; authorization: PolicyToken }
+  | { kind: 'post_comment'; commentTemplate: CommentTemplate; authorization: PolicyToken };
 
-function authorized(analysis: Analysis, kind: 'add_labels' | 'post_comment'): string | null {
+function getAuthorization(
+  analysis: Analysis,
+  kind: 'add_labels' | 'post_comment',
+): { present: boolean; token: PolicyToken | null } {
   const operation = analysis.operations.find((item) => item.kind === kind);
-  if (!operation || !POLICY_RE.test(operation.authorization)) return null;
-  return operation.authorization;
+  if (!operation) return { present: false, token: null };
+  if (!ALLOWED_TOKENS[kind].includes(operation.authorization as PolicyToken)) {
+    return { present: true, token: null };
+  }
+  return { present: true, token: operation.authorization as PolicyToken };
 }
 
 export function preparePlan(analysis: Analysis, config: ArbiterConfig, currentLabels: string[]): PlannedOperation[] {
@@ -21,30 +30,32 @@ export function preparePlan(analysis: Analysis, config: ArbiterConfig, currentLa
   const current = new Set(currentLabels);
 
   if (allowed.has('add_labels')) {
-    const auth = authorized(analysis, 'add_labels') ?? 'POLICY-LABEL';
-    const priorityLabel = `${config.labels.prefix}/priority-${analysis.priority}`;
-    const desired = new Set<string>();
-    for (const label of [
-      ...analysis.labels,
-      ...(config.labels.mapping[analysis.category] ?? []),
-      priorityLabel,
-    ]) {
-      if (allowlist.has(label) && !current.has(label)) desired.add(label);
-    }
-    const labels = [...desired].slice(0, 3);
-    if (labels.length > 0) {
-      operations.push({ kind: 'add_labels', labels, authorization: auth });
+    const auth = getAuthorization(analysis, 'add_labels');
+    if (!auth.present || auth.token) {
+      const priorityLabel = `${config.labels.prefix}/priority-${analysis.priority}`;
+      const desired = new Set<string>();
+      for (const label of [
+        ...(config.labels.mapping[analysis.category] ?? []),
+        priorityLabel,
+        ...analysis.labels,
+      ]) {
+        if (allowlist.has(label) && !current.has(label)) desired.add(label);
+      }
+      const labels = [...desired].slice(0, 3);
+      if (labels.length > 0) {
+        operations.push({ kind: 'add_labels', labels, authorization: auth.token ?? 'POLICY-LABEL' });
+      }
     }
   }
 
   if (allowed.has('post_comment')) {
-    const auth = authorized(analysis, 'post_comment');
+    const auth = getAuthorization(analysis, 'post_comment');
     const operation = analysis.operations.find((item) => item.kind === 'post_comment');
-    if (auth && operation) {
+    if (auth.token && operation) {
       operations.push({
         kind: 'post_comment',
         commentTemplate: operation.commentTemplate ?? 'triage-summary',
-        authorization: auth,
+        authorization: auth.token,
       });
     }
   }

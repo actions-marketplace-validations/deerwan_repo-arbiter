@@ -21,15 +21,18 @@ function optionalEnv(name: string): string | undefined {
 
 export function loadRuntimeOptions(): RuntimeOptions {
   const dryRun = parseBoolean(core.getInput('dry-run') || 'true', 'dry-run');
-  const githubToken = core.getInput('github-token') || optionalEnv('GITHUB_TOKEN') || '';
+  const force = parseBoolean(core.getInput('force') || 'false', 'force');
+  const githubTokenInput = core.getInput('github-token');
+  const githubTokenEnv = optionalEnv('GITHUB_TOKEN');
+  const githubToken = githubTokenInput || githubTokenEnv || '';
   if (!githubToken) throw new ConfigError('github-token input or GITHUB_TOKEN env var is required');
 
   const llmApiKey = optionalEnv('ARBITER_LLM_API_KEY');
-  if (llmApiKey === githubToken) {
+  if (llmApiKey && (llmApiKey === githubTokenInput || llmApiKey === githubTokenEnv)) {
     throw new ArbiterFailureError(
       makeFailure(
         'llm-key-is-github-token',
-        'ARBITER_LLM_API_KEY must not equal GITHUB_TOKEN.',
+        'ARBITER_LLM_API_KEY must not equal a GitHub token.',
         'Use a separate provider key so credentials are not sent to a third-party LLM host.',
       ),
     );
@@ -42,6 +45,8 @@ export function loadRuntimeOptions(): RuntimeOptions {
 
   return {
     dryRun,
+    force,
+    botLogin: core.getInput('bot-login') || optionalEnv('ARBITER_BOT_LOGIN') || 'github-actions[bot]',
     configPath: core.getInput('config-path') || '.github/arbiter.yml',
     policyPath: core.getInput('policy-path') || '',
     githubToken,

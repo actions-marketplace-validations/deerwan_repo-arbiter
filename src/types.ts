@@ -13,10 +13,13 @@ export interface IssueContext {
 export interface RepoComment {
   id: number;
   body: string;
+  author?: string;
 }
 
 export interface RuntimeOptions {
   dryRun: boolean;
+  force: boolean;
+  botLogin: string;
   configPath: string;
   policyPath: string;
   githubToken: string;

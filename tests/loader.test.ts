@@ -22,4 +22,21 @@ describe('loadRuntimeOptions', () => {
 
     expect(() => loadRuntimeOptions()).toThrow(ArbiterFailureError);
   });
+
+  it('rejects an LLM key equal to the raw GITHUB_TOKEN env value', () => {
+    process.env['INPUT_GITHUB-TOKEN'] = 'app-token';
+    process.env.GITHUB_TOKEN = 'default-token';
+    process.env.ARBITER_LLM_API_KEY = 'default-token';
+
+    expect(() => loadRuntimeOptions()).toThrow(ArbiterFailureError);
+  });
+
+  it('defaults botLogin and parses force', () => {
+    process.env.GITHUB_TOKEN = 'default-token';
+    process.env['INPUT_FORCE'] = 'true';
+
+    const options = loadRuntimeOptions();
+    expect(options.botLogin).toBe('github-actions[bot]');
+    expect(options.force).toBe(true);
+  });
 });

@@ -4,6 +4,13 @@ export const CATEGORIES = ['bug', 'feature', 'question', 'docs', 'duplicate', 'i
 export const PRIORITIES = ['critical', 'high', 'medium', 'low'] as const;
 export const OPERATION_KINDS = ['add_labels', 'post_comment'] as const;
 export const COMMENT_TEMPLATES = ['triage-summary', 'needs-info', 'duplicate'] as const;
+export const POLICY_TOKENS = [
+  'POLICY-CATEGORY',
+  'POLICY-PRIORITY',
+  'POLICY-LABEL',
+  'POLICY-COMMENT',
+  'POLICY-DUPLICATE',
+] as const;
 
 const duplicateCandidateSchema = z
   .object({
@@ -15,7 +22,7 @@ const duplicateCandidateSchema = z
 const operationSchema = z
   .object({
     kind: z.enum(OPERATION_KINDS),
-    authorization: z.string().regex(/^POLICY-[A-Z0-9-]+$/),
+    authorization: z.enum(POLICY_TOKENS),
     commentTemplate: z.enum(COMMENT_TEMPLATES).optional(),
   })
   .strict();
@@ -65,7 +72,7 @@ export const analysisJsonSchema = {
         required: ['kind', 'authorization'],
         properties: {
           kind: { type: 'string', enum: [...OPERATION_KINDS] },
-          authorization: { type: 'string', pattern: '^POLICY-[A-Z0-9-]+$' },
+          authorization: { type: 'string', enum: [...POLICY_TOKENS] },
           commentTemplate: { type: 'string', enum: [...COMMENT_TEMPLATES] },
         },
       },
@@ -78,3 +85,4 @@ export type Category = (typeof CATEGORIES)[number];
 export type Priority = (typeof PRIORITIES)[number];
 export type OperationKind = (typeof OPERATION_KINDS)[number];
 export type CommentTemplate = (typeof COMMENT_TEMPLATES)[number];
+export type PolicyToken = (typeof POLICY_TOKENS)[number];

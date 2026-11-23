@@ -61,4 +61,13 @@ describe('createLlmProvider', () => {
       }),
     ).toThrow(ArbiterFailureError);
   });
+
+  it('does not silently fall back to mock when a key is missing', async () => {
+    const fetchImpl = async (): Promise<Response> => jsonResponse({}, 401);
+    const provider = createLlmProvider(
+      { provider: 'openai', model: 'gpt-4o-mini', githubToken: 'gh-token' },
+      fetchImpl as typeof globalThis.fetch,
+    );
+    await expect(provider.generateJson(request, parseAnalysis)).rejects.toThrow(ArbiterFailureError);
+  });
 });

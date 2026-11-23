@@ -35,3 +35,15 @@ export function extractFingerprints(body: string): string[] {
 export function containsMarker(body: string, marker: string): boolean {
   return body.includes(marker);
 }
+
+export function hasFingerprintFrom(
+  comments: Array<{ body: string; author?: string }>,
+  fingerprint: string,
+  botLogin?: string,
+): boolean {
+  return comments.some(
+    (comment) =>
+      (!botLogin || comment.author === botLogin) &&
+      extractFingerprints(comment.body).includes(fingerprint),
+  );
+}

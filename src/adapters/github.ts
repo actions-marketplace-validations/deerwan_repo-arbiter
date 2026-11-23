@@ -18,6 +18,7 @@ export class GithubAdapter implements GithubReadPort, WritePort {
     private readonly owner: string,
     private readonly repo: string,
     private readonly issueNumber?: number,
+    private readonly botLogin?: string,
   ) {}
 
   private requireIssueNumber(): number {
@@ -54,7 +55,11 @@ export class GithubAdapter implements GithubReadPort, WritePort {
       issue_number: issueNumber,
       per_page: 100,
     });
-    return response.data.map((comment) => ({ id: comment.id, body: comment.body ?? '' }));
+    return response.data.map((comment) => ({
+      id: comment.id,
+      body: comment.body ?? '',
+      author: comment.user?.login,
+    }));
   }
 
   async listLabels(): Promise<string[]> {
@@ -104,7 +109,10 @@ export class GithubAdapter implements GithubReadPort, WritePort {
     const issueNumber = this.requireIssueNumber();
     const content = body.includes(marker) ? body : `${marker}\n${body}`;
     const comments = await this.listComments(issueNumber);
-    const existing = comments.find((comment) => comment.body.includes(marker));
+    const existing = comments.find(
+      (comment) =>
+        comment.body.includes(marker) && (!this.botLogin || comment.author === this.botLogin),
+    );
     if (existing) {
       await this.octokit.rest.issues.updateComment({
         owner: this.owner,

@@ -3,6 +3,7 @@ import {
   computeFingerprint,
   extractFingerprints,
   fingerprintMarker,
+  hasFingerprintFrom,
 } from '../src/core/idempotency.js';
 
 describe('idempotency', () => {
@@ -28,5 +29,16 @@ describe('idempotency', () => {
     const fp = 'a'.repeat(64);
     const body = `${fingerprintMarker(fp)}\n\ntriage`;
     expect(extractFingerprints(body)).toEqual([fp]);
+  });
+
+  it('only trusts fingerprints from the configured bot author', () => {
+    const fp = 'b'.repeat(64);
+    const body = fingerprintMarker(fp);
+    const comments = [
+      { body, author: 'attacker' },
+      { body, author: 'repo-arbiter-dev[bot]' },
+    ];
+    expect(hasFingerprintFrom(comments, fp, 'repo-arbiter-dev[bot]')).toBe(true);
+    expect(hasFingerprintFrom([comments[0]], fp, 'repo-arbiter-dev[bot]')).toBe(false);
   });
 });

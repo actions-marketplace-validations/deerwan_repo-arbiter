@@ -4,13 +4,18 @@ on:
   issues:
     types: [opened, reopened]
   workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Issue number to analyze
+        required: true
+        type: string
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: repo-arbiter
+  group: repo-arbiter-${{ github.event.issue.number || inputs.issue-number }}
   queue: max
 
 jobs:
@@ -20,11 +25,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.sender.type != 'Bot'
     steps:
       - name: Run Repo Arbiter
-        uses: your-org/repo-arbiter@v0.1.3
+        uses: deerwan/repo-arbiter@v0.1.4
         with:
           dry-run: 'true'
+          issue-number: ${{ inputs.issue-number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARBITER_LLM_API_KEY: ${{ secrets.ARBITER_LLM_API_KEY }}
+          ARBITER_LLM_BASE_URL: ${{ secrets.ARBITER_LLM_BASE_URL }}
+          ARBITER_LLM_MODEL: ${{ secrets.ARBITER_LLM_MODEL }}
           ARBITER_LLM_PROVIDER: openai
-          ARBITER_LLM_MODEL: gpt-4o-mini

@@ -14,17 +14,24 @@ describe('preparePlan', () => {
     });
   });
 
-  it('falls back to policy authorization for mapped label operations', () => {
+  it('drops an operation whose token is not valid for that operation kind', () => {
     const analysis = makeAnalysis({
       operations: [
-        { kind: 'add_labels', authorization: 'just-do-it' },
+        { kind: 'add_labels', authorization: 'POLICY-COMMENT' },
         { kind: 'post_comment', authorization: 'POLICY-COMMENT' },
       ],
     });
     const operations = preparePlan(analysis, makeConfig(), []);
-    const addLabels = operations.find((op) => op.kind === 'add_labels');
-    expect(addLabels?.authorization).toBe('POLICY-LABEL');
+    expect(operations.some((op) => op.kind === 'add_labels')).toBe(false);
     expect(operations.some((op) => op.kind === 'post_comment')).toBe(true);
+  });
+
+  it('uses deterministic policy authorization when the model omits a label operation', () => {
+    const analysis = makeAnalysis({
+      operations: [{ kind: 'post_comment', authorization: 'POLICY-COMMENT' }],
+    });
+    const operations = preparePlan(analysis, makeConfig(), []);
+    expect(operations.find((op) => op.kind === 'add_labels')?.authorization).toBe('POLICY-LABEL');
   });
 
   it('respects disabled operations', () => {
