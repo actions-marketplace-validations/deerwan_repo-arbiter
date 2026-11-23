@@ -28,9 +28,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPO_ARBITER_APP_ID }}
+          private-key: ${{ secrets.REPO_ARBITER_APP_PRIVATE_KEY }}
+
       - name: Run Repo Arbiter
         uses: ./
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           dry-run: ${{ inputs.dry-run }}
           issue-number: ${{ inputs.issue-number }}
         env:
