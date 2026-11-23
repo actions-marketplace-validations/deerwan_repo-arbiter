@@ -1,0 +1,33 @@
+name: Arbiter Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Issue number to analyze
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Repo Arbiter
+        uses: ./
+        with:
+          dry-run: 'true'
+          issue-number: ${{ inputs.issue-number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARBITER_LLM_API_KEY: ${{ secrets.ARBITER_LLM_API_KEY }}
+          ARBITER_LLM_BASE_URL: ${{ secrets.ARBITER_LLM_BASE_URL }}
+          ARBITER_LLM_MODEL: ${{ secrets.ARBITER_LLM_MODEL }}
+          ARBITER_LLM_PROVIDER: openai
