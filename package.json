@@ -1,6 +1,6 @@
 {
   "name": "repo-arbiter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Policy-gated AI triage for GitHub issues and pull requests",
   "type": "module",
   "main": "dist/index.cjs",

@@ -105,7 +105,6 @@ export async function run(): Promise<void> {
       repo: `${owner}/${repo}`,
       entity: String(issueNumber),
       agent: 'triage',
-      updatedAt: issue.updatedAt,
     });
 
     const comments = await reader.listComments(issueNumber);

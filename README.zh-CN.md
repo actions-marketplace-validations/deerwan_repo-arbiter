@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: your-org/repo-arbiter@v0.1.1
+      - uses: your-org/repo-arbiter@v0.1.2
         with:
           dry-run: 'true'
         env:

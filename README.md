@@ -17,7 +17,7 @@ Policy-gated AI triage for GitHub repositories. The model proposes a decision; d
 ## Usage
 
 ```yaml
-- uses: your-org/repo-arbiter@v0.1.1
+- uses: your-org/repo-arbiter@v0.1.2
   with:
     dry-run: 'true'
   env:

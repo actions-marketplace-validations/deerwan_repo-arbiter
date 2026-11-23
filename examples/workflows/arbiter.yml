@@ -20,7 +20,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.sender.type != 'Bot'
     steps:
       - name: Run Repo Arbiter
-        uses: your-org/repo-arbiter@v0.1.1
+        uses: your-org/repo-arbiter@v0.1.2
         with:
           dry-run: 'true'
         env:

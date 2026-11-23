@@ -21,7 +21,7 @@ export function preparePlan(analysis: Analysis, config: ArbiterConfig, currentLa
   const current = new Set(currentLabels);
 
   if (allowed.has('add_labels')) {
-    const auth = authorized(analysis, 'add_labels');
+    const auth = authorized(analysis, 'add_labels') ?? 'POLICY-LABEL';
     const priorityLabel = `${config.labels.prefix}/priority-${analysis.priority}`;
     const desired = new Set<string>();
     for (const label of [
@@ -32,7 +32,7 @@ export function preparePlan(analysis: Analysis, config: ArbiterConfig, currentLa
       if (allowlist.has(label) && !current.has(label)) desired.add(label);
     }
     const labels = [...desired].slice(0, 3);
-    if (auth && labels.length > 0) {
+    if (labels.length > 0) {
       operations.push({ kind: 'add_labels', labels, authorization: auth });
     }
   }

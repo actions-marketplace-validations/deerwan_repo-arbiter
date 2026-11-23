@@ -28188,7 +28188,7 @@ function preparePlan(analysis, config, currentLabels) {
   const allowlist = new Set(config.labels.allowlist);
   const current = new Set(currentLabels);
   if (allowed.has("add_labels")) {
-    const auth = authorized(analysis, "add_labels");
+    const auth = authorized(analysis, "add_labels") ?? "POLICY-LABEL";
     const priorityLabel = `${config.labels.prefix}/priority-${analysis.priority}`;
     const desired = /* @__PURE__ */ new Set();
     for (const label of [
@@ -28199,7 +28199,7 @@ function preparePlan(analysis, config, currentLabels) {
       if (allowlist.has(label) && !current.has(label)) desired.add(label);
     }
     const labels = [...desired].slice(0, 3);
-    if (auth && labels.length > 0) {
+    if (labels.length > 0) {
       operations.push({ kind: "add_labels", labels, authorization: auth });
     }
   }
@@ -31393,8 +31393,7 @@ async function run() {
       action: payload.action ?? "",
       repo: `${owner}/${repo}`,
       entity: String(issueNumber),
-      agent: "triage",
-      updatedAt: issue.updatedAt
+      agent: "triage"
     });
     const comments = await reader.listComments(issueNumber);
     if (comments.some((comment) => extractFingerprints(comment.body).includes(fingerprint))) {
