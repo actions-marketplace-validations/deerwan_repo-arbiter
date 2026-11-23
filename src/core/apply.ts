@@ -4,12 +4,15 @@ export interface WritePort {
   ensureLabel(name: string, description: string): Promise<void>;
   addLabels(labels: string[]): Promise<void>;
   upsertComment(marker: string, body: string): Promise<void>;
+  deleteCommentsWithMarker(marker: string, botLogin?: string): Promise<void>;
 }
 
 export interface ApplyContext {
   summaryMarker: string;
   commentBody: string;
   labelDescriptions: Record<string, string>;
+  failureMarker?: string;
+  botLogin?: string;
 }
 
 export async function applyPlan(
@@ -30,6 +33,10 @@ export async function applyPlan(
     await writer.upsertComment(context.summaryMarker, context.commentBody);
     applied.push(`post_comment:${operation.commentTemplate}`);
   }
+
+  if (context.failureMarker) {
+    await writer.deleteCommentsWithMarker(context.failureMarker, context.botLogin);
+  }
   return applied;
 }
 
@@ -46,5 +53,9 @@ export class DryRunWriter implements WritePort {
 
   async upsertComment(marker: string, body: string): Promise<void> {
     this.calls.push({ method: 'upsertComment', args: [marker, body] });
+  }
+
+  async deleteCommentsWithMarker(marker: string, botLogin?: string): Promise<void> {
+    this.calls.push({ method: 'deleteCommentsWithMarker', args: [marker, botLogin] });
   }
 }

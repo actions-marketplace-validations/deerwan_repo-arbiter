@@ -70,4 +70,16 @@ describe('createLlmProvider', () => {
     );
     await expect(provider.generateJson(request, parseAnalysis)).rejects.toThrow(ArbiterFailureError);
   });
+
+  it('classifies rate limits structurally', async () => {
+    const fetchImpl = async (): Promise<Response> => jsonResponse({}, 429);
+    const provider = createLlmProvider(
+      { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini', githubToken: 'gh-token' },
+      fetchImpl as typeof globalThis.fetch,
+      async () => undefined,
+    );
+    await expect(provider.generateJson(request, parseAnalysis)).rejects.toMatchObject({
+      failure: { class_name: 'rate-limited' },
+    });
+  });
 });

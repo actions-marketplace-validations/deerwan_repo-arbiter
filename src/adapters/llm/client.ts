@@ -1,4 +1,4 @@
-import { ArbiterFailureError, makeFailure } from '../../failures.js';
+import { ArbiterFailureError, classifyHttpStatus, makeFailure } from '../../failures.js';
 import type { LlmUsage } from '../../types.js';
 import type { JsonRequest, LlmProvider, LlmProviderName } from './types.js';
 
@@ -27,6 +27,7 @@ const MOCK_ANALYSIS = JSON.stringify({
 });
 
 const EMPTY_USAGE: LlmUsage = { inputTokens: 0, outputTokens: 0 };
+const REQUEST_TIMEOUT_MS = 30_000;
 
 async function withRetry(
   run: () => Promise<Response>,
@@ -42,14 +43,6 @@ async function withRetry(
   throw new Error('unreachable');
 }
 
-async function responseText(response: Response): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return '';
-  }
-}
-
 function createOpenAiProvider(options: LlmProviderOptions, fetchImpl: FetchImpl, sleep: (ms: number) => Promise<void>): LlmProvider {
   const baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
   return {
@@ -59,6 +52,7 @@ function createOpenAiProvider(options: LlmProviderOptions, fetchImpl: FetchImpl,
           () =>
             fetchImpl(`${baseUrl}/chat/completions`, {
               method: 'POST',
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
               headers: {
                 authorization: `Bearer ${options.apiKey ?? ''}`,
                 'content-type': 'application/json',
@@ -77,13 +71,7 @@ function createOpenAiProvider(options: LlmProviderOptions, fetchImpl: FetchImpl,
           sleep,
         );
         if (!response.ok) {
-          throw new ArbiterFailureError(
-            makeFailure(
-              response.status === 401 || response.status === 403 ? 'invalid-llm-key' : 'external-error',
-              `OpenAI-compatible endpoint returned HTTP ${response.status}.`,
-              `Check the provider configuration. Response: ${(await responseText(response)).slice(0, 300)}`,
-            ),
-          );
+          throw new ArbiterFailureError(classifyHttpStatus(response.status, 'llm'));
         }
         const payload = (await response.json()) as {
           choices?: Array<{ message?: { content?: string } }>;
@@ -116,6 +104,7 @@ function createAnthropicProvider(options: LlmProviderOptions, fetchImpl: FetchIm
           () =>
             fetchImpl('https://api.anthropic.com/v1/messages', {
               method: 'POST',
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
               headers: {
                 'x-api-key': options.apiKey ?? '',
                 'anthropic-version': '2023-06-01',
@@ -132,13 +121,7 @@ function createAnthropicProvider(options: LlmProviderOptions, fetchImpl: FetchIm
           sleep,
         );
         if (!response.ok) {
-          throw new ArbiterFailureError(
-            makeFailure(
-              response.status === 401 || response.status === 403 ? 'invalid-llm-key' : 'external-error',
-              `Anthropic returned HTTP ${response.status}.`,
-              `Check the API key and model. Response: ${(await responseText(response)).slice(0, 300)}`,
-            ),
-          );
+          throw new ArbiterFailureError(classifyHttpStatus(response.status, 'llm'));
         }
         const payload = (await response.json()) as {
           content?: Array<{ type?: string; text?: string }>;

@@ -27,6 +27,13 @@ export function loadRuntimeOptions(): RuntimeOptions {
   const githubToken = githubTokenInput || githubTokenEnv || '';
   if (!githubToken) throw new ConfigError('github-token input or GITHUB_TOKEN env var is required');
 
+  const botLoginInput = core.getInput('bot-login');
+  const botLoginEnv = optionalEnv('ARBITER_BOT_LOGIN');
+  const botLogin = botLoginInput || botLoginEnv || 'github-actions[bot]';
+  if (githubTokenInput && !botLoginInput && !botLoginEnv) {
+    throw new ConfigError('bot-login is required when a custom github-token input is provided');
+  }
+
   const llmApiKey = optionalEnv('ARBITER_LLM_API_KEY');
   if (llmApiKey && (llmApiKey === githubTokenInput || llmApiKey === githubTokenEnv)) {
     throw new ArbiterFailureError(
@@ -46,7 +53,7 @@ export function loadRuntimeOptions(): RuntimeOptions {
   return {
     dryRun,
     force,
-    botLogin: core.getInput('bot-login') || optionalEnv('ARBITER_BOT_LOGIN') || 'github-actions[bot]',
+    botLogin,
     configPath: core.getInput('config-path') || '.github/arbiter.yml',
     policyPath: core.getInput('policy-path') || '',
     githubToken,

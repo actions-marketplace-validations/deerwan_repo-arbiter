@@ -21,4 +21,21 @@ describe('applyPlan with DryRunWriter', () => {
       'upsertComment',
     ]);
   });
+
+  it('records failure comment cleanup after a successful apply', async () => {
+    const operations = preparePlan(makeAnalysis(), makeConfig(), []);
+    const writer = new DryRunWriter();
+    await applyPlan(operations, writer, {
+      summaryMarker: '<!-- repo-arbiter:summary:v1 -->',
+      commentBody: 'body',
+      labelDescriptions: {},
+      failureMarker: '<!-- repo-arbiter:failure:v1 -->',
+      botLogin: 'repo-arbiter-dev[bot]',
+    });
+
+    expect(writer.calls.at(-1)).toMatchObject({
+      method: 'deleteCommentsWithMarker',
+      args: ['<!-- repo-arbiter:failure:v1 -->', 'repo-arbiter-dev[bot]'],
+    });
+  });
 });

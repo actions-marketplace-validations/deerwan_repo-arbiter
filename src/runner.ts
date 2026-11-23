@@ -200,6 +200,8 @@ export async function run(): Promise<void> {
       summaryMarker: SUMMARY_MARKER,
       commentBody,
       labelDescriptions,
+      failureMarker: FAILURE_MARKER,
+      botLogin,
     });
 
     core.setOutput('applied', JSON.stringify(applied));

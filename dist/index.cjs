@@ -23896,6 +23896,9 @@ async function applyPlan(operations, writer, context2) {
     await writer.upsertComment(context2.summaryMarker, context2.commentBody);
     applied.push(`post_comment:${operation.commentTemplate}`);
   }
+  if (context2.failureMarker) {
+    await writer.deleteCommentsWithMarker(context2.failureMarker, context2.botLogin);
+  }
   return applied;
 }
 var DryRunWriter = class {
@@ -23908,6 +23911,9 @@ var DryRunWriter = class {
   }
   async upsertComment(marker, body) {
     this.calls.push({ method: "upsertComment", args: [marker, body] });
+  }
+  async deleteCommentsWithMarker(marker, botLogin) {
+    this.calls.push({ method: "deleteCommentsWithMarker", args: [marker, botLogin] });
   }
 };
 
@@ -28330,6 +28336,7 @@ var MOCK_ANALYSIS = JSON.stringify({
   ]
 });
 var EMPTY_USAGE = { inputTokens: 0, outputTokens: 0 };
+var REQUEST_TIMEOUT_MS = 3e4;
 async function withRetry(run2, sleep) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await run2();
@@ -28340,13 +28347,6 @@ async function withRetry(run2, sleep) {
   }
   throw new Error("unreachable");
 }
-async function responseText(response) {
-  try {
-    return await response.text();
-  } catch {
-    return "";
-  }
-}
 function createOpenAiProvider(options, fetchImpl, sleep) {
   const baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
   return {
@@ -28355,6 +28355,7 @@ function createOpenAiProvider(options, fetchImpl, sleep) {
         const response = await withRetry(
           () => fetchImpl(`${baseUrl}/chat/completions`, {
             method: "POST",
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             headers: {
               authorization: `Bearer ${options.apiKey ?? ""}`,
               "content-type": "application/json"
@@ -28373,13 +28374,7 @@ function createOpenAiProvider(options, fetchImpl, sleep) {
           sleep
         );
         if (!response.ok) {
-          throw new ArbiterFailureError(
-            makeFailure(
-              response.status === 401 || response.status === 403 ? "invalid-llm-key" : "external-error",
-              `OpenAI-compatible endpoint returned HTTP ${response.status}.`,
-              `Check the provider configuration. Response: ${(await responseText(response)).slice(0, 300)}`
-            )
-          );
+          throw new ArbiterFailureError(classifyHttpStatus(response.status, "llm"));
         }
         const payload = await response.json();
         const text = payload.choices?.[0]?.message?.content;
@@ -28407,6 +28402,7 @@ function createAnthropicProvider(options, fetchImpl, sleep) {
         const response = await withRetry(
           () => fetchImpl("https://api.anthropic.com/v1/messages", {
             method: "POST",
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             headers: {
               "x-api-key": options.apiKey ?? "",
               "anthropic-version": "2023-06-01",
@@ -28423,13 +28419,7 @@ function createAnthropicProvider(options, fetchImpl, sleep) {
           sleep
         );
         if (!response.ok) {
-          throw new ArbiterFailureError(
-            makeFailure(
-              response.status === 401 || response.status === 403 ? "invalid-llm-key" : "external-error",
-              `Anthropic returned HTTP ${response.status}.`,
-              `Check the API key and model. Response: ${(await responseText(response)).slice(0, 300)}`
-            )
-          );
+          throw new ArbiterFailureError(classifyHttpStatus(response.status, "llm"));
         }
         const payload = await response.json();
         const text = payload.content?.find((item) => item.type === "text")?.text;
@@ -28507,25 +28497,25 @@ var GithubAdapter = class {
     };
   }
   async listComments(issueNumber) {
-    const response = await this.octokit.rest.issues.listComments({
+    const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
       owner: this.owner,
       repo: this.repo,
       issue_number: issueNumber,
       per_page: 100
     });
-    return response.data.map((comment) => ({
+    return comments.map((comment) => ({
       id: comment.id,
       body: comment.body ?? "",
       author: comment.user?.login
     }));
   }
   async listLabels() {
-    const response = await this.octokit.rest.issues.listLabelsForRepo({
+    const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
       owner: this.owner,
       repo: this.repo,
       per_page: 100
     });
-    return response.data.map((label) => label.name);
+    return labels.map((label) => label.name);
   }
   async searchDuplicates(issueNumber, title) {
     const query = `repo:${this.owner}/${this.repo} is:issue is:open "${title.replace(/"/g, "").slice(0, 100)}" in:title`;
@@ -28578,6 +28568,20 @@ ${body}`;
       issue_number: issueNumber,
       body: content
     });
+  }
+  async deleteCommentsWithMarker(marker, botLogin) {
+    const issueNumber = this.requireIssueNumber();
+    const owner = botLogin ?? this.botLogin;
+    const comments = await this.listComments(issueNumber);
+    for (const comment of comments) {
+      if (!comment.body.includes(marker)) continue;
+      if (owner && comment.author !== owner) continue;
+      await this.octokit.rest.issues.deleteComment({
+        owner: this.owner,
+        repo: this.repo,
+        comment_id: comment.id
+      });
+    }
   }
 };
 function toArbiterFailure(error) {
@@ -31309,6 +31313,12 @@ function loadRuntimeOptions() {
   const githubTokenEnv = optionalEnv("GITHUB_TOKEN");
   const githubToken = githubTokenInput || githubTokenEnv || "";
   if (!githubToken) throw new ConfigError("github-token input or GITHUB_TOKEN env var is required");
+  const botLoginInput = core2.getInput("bot-login");
+  const botLoginEnv = optionalEnv("ARBITER_BOT_LOGIN");
+  const botLogin = botLoginInput || botLoginEnv || "github-actions[bot]";
+  if (githubTokenInput && !botLoginInput && !botLoginEnv) {
+    throw new ConfigError("bot-login is required when a custom github-token input is provided");
+  }
   const llmApiKey = optionalEnv("ARBITER_LLM_API_KEY");
   if (llmApiKey && (llmApiKey === githubTokenInput || llmApiKey === githubTokenEnv)) {
     throw new ArbiterFailureError(
@@ -31326,7 +31336,7 @@ function loadRuntimeOptions() {
   return {
     dryRun,
     force,
-    botLogin: core2.getInput("bot-login") || optionalEnv("ARBITER_BOT_LOGIN") || "github-actions[bot]",
+    botLogin,
     configPath: core2.getInput("config-path") || ".github/arbiter.yml",
     policyPath: core2.getInput("policy-path") || "",
     githubToken,
@@ -31507,7 +31517,9 @@ ${explainPlan(operations)}`);
     const applied = await applyPlan(operations, writer, {
       summaryMarker: SUMMARY_MARKER,
       commentBody,
-      labelDescriptions
+      labelDescriptions,
+      failureMarker: FAILURE_MARKER,
+      botLogin
     });
     core3.setOutput("applied", JSON.stringify(applied));
     core3.setOutput("summary", `Issue #${issueNumber}: ${operations.length} operation(s) planned.`);

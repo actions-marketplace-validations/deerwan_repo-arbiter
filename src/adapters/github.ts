@@ -49,13 +49,13 @@ export class GithubAdapter implements GithubReadPort, WritePort {
   }
 
   async listComments(issueNumber: number): Promise<RepoComment[]> {
-    const response = await this.octokit.rest.issues.listComments({
+    const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
       owner: this.owner,
       repo: this.repo,
       issue_number: issueNumber,
       per_page: 100,
     });
-    return response.data.map((comment) => ({
+    return comments.map((comment) => ({
       id: comment.id,
       body: comment.body ?? '',
       author: comment.user?.login,
@@ -63,12 +63,12 @@ export class GithubAdapter implements GithubReadPort, WritePort {
   }
 
   async listLabels(): Promise<string[]> {
-    const response = await this.octokit.rest.issues.listLabelsForRepo({
+    const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
       owner: this.owner,
       repo: this.repo,
       per_page: 100,
     });
-    return response.data.map((label) => label.name);
+    return labels.map((label) => label.name);
   }
 
   async searchDuplicates(issueNumber: number, title: string): Promise<number[]> {
@@ -128,6 +128,21 @@ export class GithubAdapter implements GithubReadPort, WritePort {
       issue_number: issueNumber,
       body: content,
     });
+  }
+
+  async deleteCommentsWithMarker(marker: string, botLogin?: string): Promise<void> {
+    const issueNumber = this.requireIssueNumber();
+    const owner = botLogin ?? this.botLogin;
+    const comments = await this.listComments(issueNumber);
+    for (const comment of comments) {
+      if (!comment.body.includes(marker)) continue;
+      if (owner && comment.author !== owner) continue;
+      await this.octokit.rest.issues.deleteComment({
+        owner: this.owner,
+        repo: this.repo,
+        comment_id: comment.id,
+      });
+    }
   }
 }
 
