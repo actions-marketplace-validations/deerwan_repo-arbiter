@@ -7,10 +7,18 @@ on:
         description: Issue number to analyze
         required: true
         type: string
+      dry-run:
+        description: Preview only, do not write to GitHub
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions:
   contents: read
-  issues: read
+  issues: write
 
 jobs:
   dry-run:
@@ -23,7 +31,7 @@ jobs:
       - name: Run Repo Arbiter
         uses: ./
         with:
-          dry-run: 'true'
+          dry-run: ${{ inputs.dry-run }}
           issue-number: ${{ inputs.issue-number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
