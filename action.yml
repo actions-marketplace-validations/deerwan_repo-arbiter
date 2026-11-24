@@ -48,5 +48,5 @@ outputs:
     description: 'Structured failure class when the run failed'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.cjs'

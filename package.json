@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "npm run typecheck && esbuild src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/index.cjs --legal-comments=eof",
+    "build": "npm run typecheck && esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs --legal-comments=eof",
     "check:dist": "node scripts/check-dist.cjs",
     "verify": "npm run typecheck && npm test && npm run build && npm run check:dist"
   },

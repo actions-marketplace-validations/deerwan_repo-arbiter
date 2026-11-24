@@ -1,11 +1,12 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
-import { applyPlan, DryRunWriter } from './core/apply.js';
+import { applyPlan, DryRunWriter, type WritePort } from './core/apply.js';
+import { analyzeWithRetry, MAX_LLM_ATTEMPTS } from './core/analyze.js';
 import { computeFingerprint, fingerprintMarker, hasFingerprintFrom } from './core/idempotency.js';
 import { parseAnalysis } from './core/parse.js';
 import { explainPlan, preparePlan, renderComment, type PlannedOperation } from './core/plan.js';
 import { buildSystemPrompt, buildUserPrompt } from './core/prompt.js';
-import { analysisJsonSchema, type Analysis } from './core/schema.js';
+import { type Analysis } from './core/schema.js';
 import { writeArtifact } from './adapters/artifacts.js';
 import { createLlmProvider } from './adapters/llm/client.js';
 import { GithubAdapter, toArbiterFailure } from './adapters/github.js';
@@ -37,10 +38,18 @@ function resolveIssueNumber(payload: ArbiterPayload): number {
 function ensureCommentOperation(operations: PlannedOperation[], config: ArbiterConfig): PlannedOperation[] {
   if (!config.operations.allowed.includes('post_comment')) return operations;
   if (operations.some((op) => op.kind === 'post_comment')) return operations;
+  // The sticky comment carries the fingerprint marker, so it is always posted when allowed.
   return [
     ...operations,
     { kind: 'post_comment', commentTemplate: 'triage-summary', authorization: 'POLICY-COMMENT' },
   ];
+}
+
+/** Early-exit paths emit the same output shape as a completed run: valid empty JSON arrays plus a summary. */
+function finishWithoutPlan(issueNumber: number, reason: string): void {
+  core.setOutput('plan', '[]');
+  core.setOutput('applied', '[]');
+  core.setOutput('summary', `Issue #${issueNumber}: ${reason}`);
 }
 
 async function postFailureComment(
@@ -73,12 +82,14 @@ export async function run(): Promise<void> {
   let issueNumber = 0;
   let dryRun = true;
   let botLogin = 'github-actions[bot]';
+  let planEmitted = false;
 
   try {
     const options = loadRuntimeOptions();
     githubToken = options.githubToken;
     dryRun = options.dryRun;
     botLogin = options.botLogin;
+    core.setOutput('dry-run', String(dryRun));
 
     const payload = context.payload as ArbiterPayload;
     const repoInfo = context.repo;
@@ -88,11 +99,13 @@ export async function run(): Promise<void> {
     const ref = payload.repository?.default_branch ?? 'main';
 
     const octokit = getOctokit(githubToken);
-    const reader = new GithubAdapter(octokit, owner, repo, undefined, botLogin);
+    // One adapter for the whole run so its label cache spans planning and apply.
+    const github = new GithubAdapter(octokit, owner, repo, issueNumber, botLogin);
 
     const config = await loadRepositoryConfig(octokit, owner, repo, options.configPath, ref);
     if (!config.enabled) {
       core.info('Repo Arbiter is disabled by repository configuration.');
+      finishWithoutPlan(issueNumber, 'skipped (disabled by repository configuration).');
       return;
     }
 
@@ -100,13 +113,15 @@ export async function run(): Promise<void> {
       ? await readRepositoryText(octokit, owner, repo, options.policyPath, ref)
       : undefined;
 
-    const issue = await reader.getIssue(issueNumber);
+    const issue = await github.getIssue(issueNumber);
     if (config.exclude.users.includes(issue.author)) {
       core.info(`Skipping issue #${issueNumber}: author is excluded.`);
+      finishWithoutPlan(issueNumber, 'skipped (author is excluded).');
       return;
     }
     if (issue.labels.some((label) => config.exclude.labels.includes(label))) {
       core.info(`Skipping issue #${issueNumber}: exclude label present.`);
+      finishWithoutPlan(issueNumber, 'skipped (exclude label present).');
       return;
     }
 
@@ -120,18 +135,19 @@ export async function run(): Promise<void> {
     });
 
     if (!options.force) {
-      const comments = await reader.listComments(issueNumber);
+      const comments = await github.listComments(issueNumber);
       if (hasFingerprintFrom(comments, fingerprint, botLogin)) {
         core.info(`Issue #${issueNumber} already processed for this fingerprint.`);
+        finishWithoutPlan(issueNumber, 'already processed for this fingerprint.');
         return;
       }
     } else {
       core.info('force=true: skipping fingerprint check.');
     }
 
-    const repoLabels = await reader.listLabels();
+    const repoLabels = await github.listLabels();
     const duplicateNumbers = config.features.duplicateSearch
-      ? await reader.searchDuplicates(issueNumber, issue.title)
+      ? await github.searchDuplicates(issueNumber, issue.title)
       : [];
 
     const providerName = options.llmProvider ?? config.llm.provider;
@@ -160,9 +176,16 @@ export async function run(): Promise<void> {
       maxIssueLength: config.security.maxIssueLength,
     });
 
-    const { data: analysis, usage } = await provider.generateJson<Analysis>(
-      { system, user, schema: analysisJsonSchema, maxTokens: config.llm.maxTokens },
+    if (config.maxRuns > MAX_LLM_ATTEMPTS) {
+      core.warning(`maxRuns=${config.maxRuns} exceeds the cap; using ${MAX_LLM_ATTEMPTS} attempts.`);
+    }
+
+    const { data: analysis, usage, attempts, finalUserPrompt } = await analyzeWithRetry(
+      provider,
+      { system, user, maxTokens: config.llm.maxTokens },
+      config.maxRuns,
       parseAnalysis,
+      core.info,
     );
 
     const verifiedAnalysis: Analysis = {
@@ -183,16 +206,14 @@ export async function run(): Promise<void> {
     await writeArtifact('analysis.json', verifiedAnalysis);
     await writeArtifact('operations.json', operations);
     await writeArtifact('prompt-system.md', system);
-    await writeArtifact('prompt-user.md', user);
+    await writeArtifact('prompt-user.md', finalUserPrompt);
 
     core.setOutput('plan', JSON.stringify(operations));
-    core.setOutput('dry-run', String(dryRun));
+    planEmitted = true;
     core.info(`Planned operations:\n${explainPlan(operations)}`);
-    core.info(`LLM usage: input=${usage.inputTokens} output=${usage.outputTokens}`);
+    core.info(`LLM usage: attempts=${attempts} input=${usage.inputTokens} output=${usage.outputTokens}`);
 
-    const writer = dryRun
-      ? new DryRunWriter()
-      : new GithubAdapter(octokit, owner, repo, issueNumber, botLogin);
+    const writer: WritePort = dryRun ? new DryRunWriter() : github;
     const labelDescriptions = Object.fromEntries(
       config.labels.allowlist.map((label) => [label, `Classified by Repo Arbiter (${config.labels.prefix})`]),
     );
@@ -209,6 +230,8 @@ export async function run(): Promise<void> {
     core.info(`Repo Arbiter completed for issue #${issueNumber}. Dry run: ${dryRun}`);
   } catch (error) {
     const failure = toArbiterFailure(error);
+    if (!planEmitted) core.setOutput('plan', '[]');
+    // `applied` is intentionally left unset on failure: a partially applied plan must not read as "nothing applied".
     core.setOutput('failure-class', failure.class_name);
     core.setOutput('summary', failure.summary);
     if (!dryRun && owner && repo && issueNumber > 0 && githubToken) {

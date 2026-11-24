@@ -2,13 +2,18 @@ import type { LlmUsage } from '../../types.js';
 
 export type LlmProviderName = 'openai' | 'anthropic' | 'mock';
 
-export interface JsonRequest {
+export interface LlmRequest {
   system: string;
   user: string;
-  schema: unknown;
   maxTokens: number;
 }
 
+export interface LlmResult {
+  /** Raw model text. Schema validation is the caller's job so a rejected response still reports usage. */
+  raw: string;
+  usage: LlmUsage;
+}
+
 export interface LlmProvider {
-  generateJson<T>(request: JsonRequest, parse: (raw: string) => T): Promise<{ data: T; usage: LlmUsage }>;
+  generate(request: LlmRequest): Promise<LlmResult>;
 }

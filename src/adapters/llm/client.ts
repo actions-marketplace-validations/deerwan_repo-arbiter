@@ -1,6 +1,6 @@
 import { ArbiterFailureError, classifyHttpStatus, makeFailure } from '../../failures.js';
 import type { LlmUsage } from '../../types.js';
-import type { JsonRequest, LlmProvider, LlmProviderName } from './types.js';
+import type { LlmProvider, LlmProviderName, LlmRequest, LlmResult } from './types.js';
 
 export interface LlmProviderOptions {
   provider: LlmProviderName;
@@ -13,7 +13,7 @@ export interface LlmProviderOptions {
 
 type FetchImpl = typeof globalThis.fetch;
 
-const MOCK_ANALYSIS = JSON.stringify({
+export const MOCK_ANALYSIS = JSON.stringify({
   category: 'question',
   priority: 'low',
   confidence: 0.5,
@@ -21,13 +21,14 @@ const MOCK_ANALYSIS = JSON.stringify({
   missingInfo: [],
   duplicateCandidates: [],
   operations: [
-    { kind: 'add_labels', authorization: 'POLICY-CATEGORY' },
+    { kind: 'add_labels', authorization: 'POLICY-LABEL' },
     { kind: 'post_comment', authorization: 'POLICY-COMMENT', commentTemplate: 'triage-summary' },
   ],
 });
 
 const EMPTY_USAGE: LlmUsage = { inputTokens: 0, outputTokens: 0 };
 const REQUEST_TIMEOUT_MS = 30_000;
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 async function withRetry(
   run: () => Promise<Response>,
@@ -35,7 +36,7 @@ async function withRetry(
 ): Promise<Response> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await run();
-    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 1) {
+    if (response.ok || !RETRYABLE_STATUS.has(response.status) || attempt === 1) {
       return response;
     }
     await sleep(250 * (attempt + 1));
@@ -43,10 +44,21 @@ async function withRetry(
   throw new Error('unreachable');
 }
 
-function createOpenAiProvider(options: LlmProviderOptions, fetchImpl: FetchImpl, sleep: (ms: number) => Promise<void>): LlmProvider {
+function wrapNetworkError(providerLabel: string, error: unknown): ArbiterFailureError {
+  if (error instanceof ArbiterFailureError) return error;
+  return new ArbiterFailureError(
+    makeFailure('llm-network', `${providerLabel} request failed.`, error instanceof Error ? error.message : String(error)),
+  );
+}
+
+function createOpenAiProvider(
+  options: LlmProviderOptions,
+  fetchImpl: FetchImpl,
+  sleep: (ms: number) => Promise<void>,
+): LlmProvider {
   const baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
   return {
-    async generateJson<T>(request: JsonRequest, parse: (raw: string) => T) {
+    async generate(request: LlmRequest): Promise<LlmResult> {
       try {
         const response = await withRetry(
           () =>
@@ -77,28 +89,29 @@ function createOpenAiProvider(options: LlmProviderOptions, fetchImpl: FetchImpl,
           choices?: Array<{ message?: { content?: string } }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
-        const text = payload.choices?.[0]?.message?.content;
-        if (typeof text !== 'string') throw new Error('OpenAI response has no message content');
+        const raw = payload.choices?.[0]?.message?.content;
+        if (typeof raw !== 'string') throw new Error('OpenAI response has no message content');
         return {
-          data: parse(text),
+          raw,
           usage: {
             inputTokens: payload.usage?.prompt_tokens ?? 0,
             outputTokens: payload.usage?.completion_tokens ?? 0,
           },
         };
       } catch (error) {
-        if (error instanceof ArbiterFailureError) throw error;
-        throw new ArbiterFailureError(
-          makeFailure('llm-network', 'OpenAI-compatible request failed.', error instanceof Error ? error.message : String(error)),
-        );
+        throw wrapNetworkError('OpenAI-compatible', error);
       }
     },
   };
 }
 
-function createAnthropicProvider(options: LlmProviderOptions, fetchImpl: FetchImpl, sleep: (ms: number) => Promise<void>): LlmProvider {
+function createAnthropicProvider(
+  options: LlmProviderOptions,
+  fetchImpl: FetchImpl,
+  sleep: (ms: number) => Promise<void>,
+): LlmProvider {
   return {
-    async generateJson<T>(request: JsonRequest, parse: (raw: string) => T) {
+    async generate(request: LlmRequest): Promise<LlmResult> {
       try {
         const response = await withRetry(
           () =>
@@ -127,20 +140,17 @@ function createAnthropicProvider(options: LlmProviderOptions, fetchImpl: FetchIm
           content?: Array<{ type?: string; text?: string }>;
           usage?: { input_tokens?: number; output_tokens?: number };
         };
-        const text = payload.content?.find((item) => item.type === 'text')?.text;
-        if (typeof text !== 'string') throw new Error('Anthropic response has no text block');
+        const raw = payload.content?.find((item) => item.type === 'text')?.text;
+        if (typeof raw !== 'string') throw new Error('Anthropic response has no text block');
         return {
-          data: parse(text),
+          raw,
           usage: {
             inputTokens: payload.usage?.input_tokens ?? 0,
             outputTokens: payload.usage?.output_tokens ?? 0,
           },
         };
       } catch (error) {
-        if (error instanceof ArbiterFailureError) throw error;
-        throw new ArbiterFailureError(
-          makeFailure('llm-network', 'Anthropic request failed.', error instanceof Error ? error.message : String(error)),
-        );
+        throw wrapNetworkError('Anthropic', error);
       }
     },
   };
@@ -148,8 +158,8 @@ function createAnthropicProvider(options: LlmProviderOptions, fetchImpl: FetchIm
 
 function createMockProvider(response: string): LlmProvider {
   return {
-    async generateJson<T>(_request: JsonRequest, parse: (raw: string) => T) {
-      return { data: parse(response), usage: EMPTY_USAGE };
+    async generate(): Promise<LlmResult> {
+      return { raw: response, usage: EMPTY_USAGE };
     },
   };
 }
