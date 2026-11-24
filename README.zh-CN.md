@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: deerwan/repo-arbiter@v0.1.5
+      - uses: deerwan/repo-arbiter@v0.2.0
         with:
           dry-run: 'true'
           issue-number: ${{ inputs.issue-number }}

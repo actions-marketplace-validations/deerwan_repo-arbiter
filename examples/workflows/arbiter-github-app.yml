@@ -33,7 +33,7 @@ jobs:
           private-key: ${{ secrets.REPO_ARBITER_APP_PRIVATE_KEY }}
 
       - name: Run Repo Arbiter
-        uses: deerwan/repo-arbiter@v0.1.5
+        uses: deerwan/repo-arbiter@v0.2.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           bot-login: ${{ vars.REPO_ARBITER_BOT_LOGIN }}
