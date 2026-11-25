@@ -18,6 +18,11 @@ describe('action contracts', () => {
     expect(action).toContain("main: 'dist/index.cjs'");
   });
 
+  it('declares the node24 runtime (node20 was removed from runners on 2026-09-23)', () => {
+    expect(action).toContain("using: 'node24'");
+    expect(action).not.toContain("using: 'node20'");
+  });
+
   it('declares an issue-number input for manual runs', () => {
     expect(action).toContain('issue-number:');
   });

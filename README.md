@@ -13,6 +13,7 @@ Policy-gated AI triage for GitHub repositories. The model proposes a decision; d
 - Classifies category and priority
 - Applies namespaced labels from an allowlist
 - Posts one sticky triage comment with a hidden fingerprint marker
+- Retries a model response that fails schema validation (with the validator error fed back) before giving up
 - Supports OpenAI-compatible, Anthropic, and Mock providers
 - Uses `dry-run: true` by default
 - No database, no server, no destructive actions
@@ -47,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: deerwan/repo-arbiter@v0.1.5
+      - uses: deerwan/repo-arbiter@v0.2.0
         with:
           dry-run: 'true'
           issue-number: ${{ inputs.issue-number }}
@@ -62,6 +63,10 @@ jobs:
 Run with `dry-run: 'true'` first. After reviewing the planned operations, switch to `dry-run: 'false'`.
 
 A non-mock provider always requires `ARBITER_LLM_API_KEY`, including in dry-run mode.
+
+## Runner requirements
+
+The action uses the Node 24 runtime (`using: node24`). GitHub-hosted runners already provide it; Node 20 was removed from runners on 2026-09-23. Self-hosted runners need v2.328.0 or newer; Node 24 is incompatible with macOS 13.4 and lower and does not support ARM32. See the [GitHub changelog](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners).
 
 ## Custom bot identity
 
@@ -114,10 +119,12 @@ features:
   duplicateSearch: true
   missingInfoCheck: true
 
-maxRuns: 20
+maxRuns: 3
 ```
 
 The full example is in [`examples/arbiter.yml`](./examples/arbiter.yml).
+
+If the model's JSON fails validation, Repo Arbiter asks it again with the validator error attached. `maxRuns` caps those attempts; values above 3 are clamped to 3 so a flaky model cannot run up an unbounded bill. A rejected response is never applied.
 
 ## Environment variables
 
@@ -157,7 +164,7 @@ The full example is in [`examples/arbiter.yml`](./examples/arbiter.yml).
 ## Security notes
 
 - Issue text is treated as untrusted data and wrapped in explicit boundaries.
-- LLM output must pass strict JSON schema and runtime validation.
+- LLM output must pass strict JSON schema and runtime validation; a rejected response is retried with validator feedback, never applied.
 - Labels are filtered by allowlist; comment content is rendered from whitelisted fields only.
 - Fingerprints are trusted only from the configured `bot-login`.
 - Failure comments use a separate marker and a fixed template.

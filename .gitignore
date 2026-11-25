@@ -3,4 +3,5 @@ coverage/
 .env
 *.log
 .repo-arbiter/
+.zwork/
 .DS_Store

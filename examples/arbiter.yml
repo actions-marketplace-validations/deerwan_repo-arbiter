@@ -45,4 +45,5 @@ features:
   duplicateSearch: true
   missingInfoCheck: true
 
-maxRuns: 20
+# Max attempts when the model's JSON fails validation. Values above 3 are clamped to 3.
+maxRuns: 3

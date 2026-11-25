@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import type { getOctokit } from '@actions/github';
 import yaml from 'js-yaml';
-import { ConfigError, ArbiterFailureError, classifyHttpStatus, makeFailure } from '../failures.js';
+import { ConfigError, ArbiterFailureError, classifyHttpStatus, httpStatusOf, makeFailure } from '../failures.js';
 import { parseConfig } from '../config.js';
 import type { RuntimeOptions } from '../types.js';
 
@@ -77,7 +77,7 @@ export async function readRepositoryText(
     if (Array.isArray(data) || !('content' in data) || typeof data.content !== 'string') return null;
     return Buffer.from(data.content, 'base64').toString('utf8');
   } catch (error) {
-    const status = typeof error === 'object' && error !== null && 'status' in error ? Number((error as { status: unknown }).status) : 0;
+    const status = httpStatusOf(error);
     if (status === 404) return null;
     if (status > 0) throw new ArbiterFailureError(classifyHttpStatus(status, 'github'));
     throw error;

@@ -25,7 +25,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.sender.type != 'Bot'
     steps:
       - name: Run Repo Arbiter
-        uses: deerwan/repo-arbiter@v0.1.5
+        uses: deerwan/repo-arbiter@v0.2.0
         with:
           dry-run: 'true'
           issue-number: ${{ inputs.issue-number }}

@@ -23917,33 +23917,6 @@ var DryRunWriter = class {
   }
 };
 
-// src/core/idempotency.ts
-var import_node_crypto = require("node:crypto");
-var FINGERPRINT_MARKER_PREFIX = "<!-- repo-arbiter:fingerprint:";
-function computeFingerprint(parts) {
-  const canonical = [
-    parts.event,
-    parts.action,
-    parts.repo,
-    parts.entity,
-    parts.agent ?? "",
-    parts.updatedAt ?? ""
-  ].join(":");
-  return (0, import_node_crypto.createHash)("sha256").update(canonical, "utf8").digest("hex");
-}
-function fingerprintMarker(fingerprint) {
-  return `${FINGERPRINT_MARKER_PREFIX}${fingerprint} -->`;
-}
-function extractFingerprints(body) {
-  const matches = body.match(/<!--\s*repo-arbiter:fingerprint:([a-f0-9]{64})\s*-->/g) ?? [];
-  return matches.map((marker) => marker.match(/([a-f0-9]{64})/)?.[0] ?? "");
-}
-function hasFingerprintFrom(comments, fingerprint, botLogin) {
-  return comments.some(
-    (comment) => (!botLogin || comment.author === botLogin) && extractFingerprints(comment.body).includes(fingerprint)
-  );
-}
-
 // src/failures.ts
 var ArbiterFailureError = class extends Error {
   failure;
@@ -23967,8 +23940,10 @@ function makeFailure(class_name, summary, fix_markdown) {
   return { class_name, summary, fix_markdown };
 }
 function classifyHttpStatus(status, scope) {
+  const github = scope === "github";
+  const upstream = github ? "GitHub API" : "LLM provider";
   if (status === 401 || status === 403) {
-    return scope === "github" ? makeFailure(
+    return github ? makeFailure(
       "missing-issues-write",
       "GitHub token cannot write to this repository.",
       "Grant `issues: write` to the job and ensure the token has access to this repository."
@@ -23979,14 +23954,22 @@ function classifyHttpStatus(status, scope) {
     );
   }
   if (status === 404) {
-    return makeFailure(
+    return github ? makeFailure(
       "not-found",
       "GitHub API returned 404.",
       "Check the token scope and that the repository/issue is accessible."
+    ) : makeFailure(
+      "not-found",
+      "LLM endpoint returned 404.",
+      "Check `ARBITER_LLM_BASE_URL` (OpenAI-compatible providers) and `ARBITER_LLM_MODEL`."
     );
   }
   if (status === 410) {
-    return makeFailure(
+    return github ? makeFailure(
+      "not-found",
+      "GitHub API returned 410 (resource is gone).",
+      "Check that the repository/issue still exists."
+    ) : makeFailure(
       "provider-endpoint-gone",
       "LLM endpoint is gone.",
       "Switch provider or update `ARBITER_LLM_BASE_URL`."
@@ -23995,22 +23978,25 @@ function classifyHttpStatus(status, scope) {
   if (status === 429) {
     return makeFailure(
       "rate-limited",
-      "Rate limit reached.",
+      `${upstream} rate limit reached.`,
       "Wait for the limit to reset or reduce the number of runs."
     );
   }
   if (status >= 500) {
     return makeFailure(
       "upstream-unavailable",
-      `Upstream returned HTTP ${status}.`,
+      `${upstream} returned HTTP ${status}.`,
       "This is usually transient. Rerun the workflow."
     );
   }
   return makeFailure(
     "external-error",
-    `External API returned HTTP ${status}.`,
+    `${upstream} returned HTTP ${status}.`,
     "Check provider status and action inputs, then rerun."
   );
+}
+function httpStatusOf(error) {
+  return typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
 }
 
 // node_modules/zod/lib/index.mjs
@@ -28153,20 +28139,46 @@ function extractJson(raw) {
   }
   return raw.slice(start, end + 1);
 }
-function parseAnalysis(raw) {
-  try {
-    const parsed = JSON.parse(extractJson(raw));
-    return analysisSchema.parse(parsed);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown parse error";
-    throw new ArbiterFailureError(
+function summarizeIssues(error) {
+  return error.issues.slice(0, 5).map((issue) => {
+    const where = issue.path.join(".") || "root";
+    let expected = "";
+    if ("options" in issue) {
+      const options = issue.options ?? [];
+      expected = `; expected one of ${options.join(" | ")}`;
+    } else if ("maximum" in issue) {
+      expected = `; maximum ${String(issue.maximum)}`;
+    } else if ("minimum" in issue) {
+      expected = `; minimum ${String(issue.minimum)}`;
+    }
+    return `${where}: ${issue.code}${expected}`;
+  }).join("; ");
+}
+var AnalysisParseError = class extends ArbiterFailureError {
+  detail;
+  constructor(detail) {
+    super(
       makeFailure(
         "llm-bad-response",
         "LLM response did not match the analysis schema.",
         `Schema detail: ${detail}. The raw response was not applied.`
       )
     );
+    this.name = "AnalysisParseError";
+    this.detail = detail;
   }
+};
+function parseAnalysis(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(extractJson(raw));
+  } catch (error) {
+    const reason = error instanceof SyntaxError ? "syntax error" : error instanceof Error ? error.message : "unknown error";
+    throw new AnalysisParseError(`malformed JSON (${reason})`);
+  }
+  const result = analysisSchema.safeParse(parsed);
+  if (!result.success) throw new AnalysisParseError(summarizeIssues(result.error));
+  return result.data;
 }
 
 // src/core/sanitizer.ts
@@ -28191,6 +28203,78 @@ function buildUntrustedBlock(label, value, maxLength) {
     sanitizeText(value, maxLength),
     `=== END ${label} ===`
   ].join("\n");
+}
+
+// src/core/analyze.ts
+var MAX_LLM_ATTEMPTS = 3;
+var MAX_VALIDATOR_HINT_LENGTH = 600;
+function resolveMaxAttempts(maxRuns) {
+  if (!Number.isFinite(maxRuns)) return 1;
+  return Math.min(MAX_LLM_ATTEMPTS, Math.max(1, Math.trunc(maxRuns)));
+}
+function addUsage(total, delta) {
+  return {
+    inputTokens: total.inputTokens + delta.inputTokens,
+    outputTokens: total.outputTokens + delta.outputTokens
+  };
+}
+function withValidatorFeedback(originalUserPrompt, detail) {
+  return [
+    originalUserPrompt,
+    "",
+    "Your previous response was rejected by the schema validator. Validator detail:",
+    buildUntrustedBlock("VALIDATOR_DETAIL", detail, MAX_VALIDATOR_HINT_LENGTH),
+    "Return only the corrected JSON object matching the schema. Do not add explanations."
+  ].join("\n");
+}
+async function analyzeWithRetry(provider, request, maxRuns, parse = parseAnalysis, log = () => {
+}) {
+  const maxAttempts = resolveMaxAttempts(maxRuns);
+  let usage = { inputTokens: 0, outputTokens: 0 };
+  let user = request.user;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await provider.generate({ ...request, user });
+    usage = addUsage(usage, result.usage);
+    try {
+      return { data: parse(result.raw), usage, attempts: attempt, finalUserPrompt: user };
+    } catch (error) {
+      if (!(error instanceof AnalysisParseError)) throw error;
+      if (attempt === maxAttempts) {
+        log(`LLM usage after ${attempt} rejected attempt(s): input=${usage.inputTokens} output=${usage.outputTokens}`);
+        throw error;
+      }
+      log(`LLM response rejected (attempt ${attempt}/${maxAttempts}): ${error.detail}`);
+      user = withValidatorFeedback(request.user, error.detail);
+    }
+  }
+  throw new Error("unreachable");
+}
+
+// src/core/idempotency.ts
+var import_node_crypto = require("node:crypto");
+var FINGERPRINT_MARKER_PREFIX = "<!-- repo-arbiter:fingerprint:";
+function computeFingerprint(parts) {
+  const canonical = [
+    parts.event,
+    parts.action,
+    parts.repo,
+    parts.entity,
+    parts.agent ?? "",
+    parts.updatedAt ?? ""
+  ].join(":");
+  return (0, import_node_crypto.createHash)("sha256").update(canonical, "utf8").digest("hex");
+}
+function fingerprintMarker(fingerprint) {
+  return `${FINGERPRINT_MARKER_PREFIX}${fingerprint} -->`;
+}
+function extractFingerprints(body) {
+  const matches = body.match(/<!--\s*repo-arbiter:fingerprint:([a-f0-9]{64})\s*-->/g) ?? [];
+  return matches.map((marker) => marker.match(/([a-f0-9]{64})/)?.[0] ?? "");
+}
+function hasFingerprintFrom(comments, fingerprint, botLogin) {
+  return comments.some(
+    (comment) => (!botLogin || comment.author === botLogin) && extractFingerprints(comment.body).includes(fingerprint)
+  );
 }
 
 // src/core/plan.ts
@@ -28331,26 +28415,33 @@ var MOCK_ANALYSIS = JSON.stringify({
   missingInfo: [],
   duplicateCandidates: [],
   operations: [
-    { kind: "add_labels", authorization: "POLICY-CATEGORY" },
+    { kind: "add_labels", authorization: "POLICY-LABEL" },
     { kind: "post_comment", authorization: "POLICY-COMMENT", commentTemplate: "triage-summary" }
   ]
 });
 var EMPTY_USAGE = { inputTokens: 0, outputTokens: 0 };
 var REQUEST_TIMEOUT_MS = 3e4;
+var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 async function withRetry(run2, sleep) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await run2();
-    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 1) {
+    if (response.ok || !RETRYABLE_STATUS.has(response.status) || attempt === 1) {
       return response;
     }
     await sleep(250 * (attempt + 1));
   }
   throw new Error("unreachable");
 }
+function wrapNetworkError(providerLabel, error) {
+  if (error instanceof ArbiterFailureError) return error;
+  return new ArbiterFailureError(
+    makeFailure("llm-network", `${providerLabel} request failed.`, error instanceof Error ? error.message : String(error))
+  );
+}
 function createOpenAiProvider(options, fetchImpl, sleep) {
   const baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
   return {
-    async generateJson(request, parse) {
+    async generate(request) {
       try {
         const response = await withRetry(
           () => fetchImpl(`${baseUrl}/chat/completions`, {
@@ -28377,27 +28468,24 @@ function createOpenAiProvider(options, fetchImpl, sleep) {
           throw new ArbiterFailureError(classifyHttpStatus(response.status, "llm"));
         }
         const payload = await response.json();
-        const text = payload.choices?.[0]?.message?.content;
-        if (typeof text !== "string") throw new Error("OpenAI response has no message content");
+        const raw = payload.choices?.[0]?.message?.content;
+        if (typeof raw !== "string") throw new Error("OpenAI response has no message content");
         return {
-          data: parse(text),
+          raw,
           usage: {
             inputTokens: payload.usage?.prompt_tokens ?? 0,
             outputTokens: payload.usage?.completion_tokens ?? 0
           }
         };
       } catch (error) {
-        if (error instanceof ArbiterFailureError) throw error;
-        throw new ArbiterFailureError(
-          makeFailure("llm-network", "OpenAI-compatible request failed.", error instanceof Error ? error.message : String(error))
-        );
+        throw wrapNetworkError("OpenAI-compatible", error);
       }
     }
   };
 }
 function createAnthropicProvider(options, fetchImpl, sleep) {
   return {
-    async generateJson(request, parse) {
+    async generate(request) {
       try {
         const response = await withRetry(
           () => fetchImpl("https://api.anthropic.com/v1/messages", {
@@ -28422,28 +28510,25 @@ function createAnthropicProvider(options, fetchImpl, sleep) {
           throw new ArbiterFailureError(classifyHttpStatus(response.status, "llm"));
         }
         const payload = await response.json();
-        const text = payload.content?.find((item) => item.type === "text")?.text;
-        if (typeof text !== "string") throw new Error("Anthropic response has no text block");
+        const raw = payload.content?.find((item) => item.type === "text")?.text;
+        if (typeof raw !== "string") throw new Error("Anthropic response has no text block");
         return {
-          data: parse(text),
+          raw,
           usage: {
             inputTokens: payload.usage?.input_tokens ?? 0,
             outputTokens: payload.usage?.output_tokens ?? 0
           }
         };
       } catch (error) {
-        if (error instanceof ArbiterFailureError) throw error;
-        throw new ArbiterFailureError(
-          makeFailure("llm-network", "Anthropic request failed.", error instanceof Error ? error.message : String(error))
-        );
+        throw wrapNetworkError("Anthropic", error);
       }
     }
   };
 }
 function createMockProvider(response) {
   return {
-    async generateJson(_request, parse) {
-      return { data: parse(response), usage: EMPTY_USAGE };
+    async generate() {
+      return { raw: response, usage: EMPTY_USAGE };
     }
   };
 }
@@ -28473,6 +28558,8 @@ var GithubAdapter = class {
     this.issueNumber = issueNumber;
     this.botLogin = botLogin;
   }
+  /** Labels are effectively immutable for the duration of one run; cache them so ensureLabel is not an N+1. */
+  labelCache = null;
   requireIssueNumber() {
     if (!this.issueNumber) throw new Error("GithubAdapter write methods require an issue number");
     return this.issueNumber;
@@ -28510,12 +28597,15 @@ var GithubAdapter = class {
     }));
   }
   async listLabels() {
-    const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
-      owner: this.owner,
-      repo: this.repo,
-      per_page: 100
-    });
-    return labels.map((label) => label.name);
+    if (!this.labelCache) {
+      const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
+        owner: this.owner,
+        repo: this.repo,
+        per_page: 100
+      });
+      this.labelCache = labels.map((label) => label.name);
+    }
+    return [...this.labelCache];
   }
   async searchDuplicates(issueNumber, title) {
     const query = `repo:${this.owner}/${this.repo} is:issue is:open "${title.replace(/"/g, "").slice(0, 100)}" in:title`;
@@ -28527,15 +28617,21 @@ var GithubAdapter = class {
     }
   }
   async ensureLabel(name, description) {
-    const existing = await this.listLabels();
-    if (existing.includes(name)) return;
-    await this.octokit.rest.issues.createLabel({
-      owner: this.owner,
-      repo: this.repo,
-      name,
-      description,
-      color: "ededed"
-    });
+    if ((await this.listLabels()).includes(name)) return;
+    try {
+      await this.octokit.rest.issues.createLabel({
+        owner: this.owner,
+        repo: this.repo,
+        name,
+        description,
+        color: "ededed"
+      });
+    } catch (error) {
+      this.labelCache = null;
+      if (httpStatusOf(error) === 422 && (await this.listLabels()).includes(name)) return;
+      throw error;
+    }
+    this.labelCache?.push(name);
   }
   async addLabels(labels) {
     await this.octokit.rest.issues.addLabels({
@@ -28586,7 +28682,7 @@ ${body}`;
 };
 function toArbiterFailure(error) {
   if (error instanceof ArbiterFailureError) return error.failure;
-  const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+  const status = httpStatusOf(error);
   if (status > 0) return classifyHttpStatus(status, "github");
   return {
     class_name: "internal-error",
@@ -31242,50 +31338,36 @@ var DEFAULT_ALLOWLIST = [
 var configSchema = z.object({
   enabled: z.boolean().default(true),
   operations: z.object({
-    allowed: z.array(z.enum(OPERATION_KINDS)).min(1).default([...OPERATION_KINDS])
-  }).strict().default({}),
+    allowed: z.array(z.enum(OPERATION_KINDS)).min(1).default(() => [...OPERATION_KINDS])
+  }).strict().default(() => ({})),
   labels: z.object({
     prefix: z.string().regex(/^[a-z0-9][a-z0-9/_-]*$/).default(DEFAULT_PREFIX),
-    allowlist: z.array(z.string().min(1)).min(1).default(DEFAULT_ALLOWLIST),
+    allowlist: z.array(z.string().min(1)).min(1).default(() => [...DEFAULT_ALLOWLIST]),
     mapping: z.record(z.array(z.string().min(1)).max(3)).refine(
       (mapping) => Object.keys(mapping).every((key) => CATEGORIES.includes(key)),
       "labels.mapping keys must be supported categories"
-    ).default(CATEGORY_LABELS)
-  }).strict().default({}),
+    ).default(() => structuredClone(CATEGORY_LABELS))
+  }).strict().default(() => ({})),
   llm: z.object({
     provider: z.enum(["openai", "anthropic", "mock"]).default("openai"),
     model: z.string().min(1).default("gpt-4o-mini"),
     maxTokens: z.number().int().positive().max(8e3).default(1200),
     baseUrl: z.string().url().optional()
-  }).strict().default({}),
+  }).strict().default(() => ({})),
   security: z.object({
     maxIssueLength: z.number().int().positive().max(5e4).default(12e3)
-  }).strict().default({}),
+  }).strict().default(() => ({})),
   exclude: z.object({
-    labels: z.array(z.string()).default([]),
-    users: z.array(z.string()).default([])
-  }).strict().default({}),
+    labels: z.array(z.string()).default(() => []),
+    users: z.array(z.string()).default(() => [])
+  }).strict().default(() => ({})),
   features: z.object({
     duplicateSearch: z.boolean().default(true),
     missingInfoCheck: z.boolean().default(true)
-  }).strict().default({}),
-  maxRuns: z.number().int().positive().max(100).default(20),
+  }).strict().default(() => ({})),
+  maxRuns: z.number().int().positive().max(100).default(MAX_LLM_ATTEMPTS),
   additionalInstructions: z.string().max(2e3).optional()
 }).strict();
-var DEFAULT_CONFIG = {
-  enabled: true,
-  operations: { allowed: [...OPERATION_KINDS] },
-  labels: {
-    prefix: DEFAULT_PREFIX,
-    allowlist: [...DEFAULT_ALLOWLIST],
-    mapping: structuredClone(CATEGORY_LABELS)
-  },
-  llm: { provider: "openai", model: "gpt-4o-mini", maxTokens: 1200 },
-  security: { maxIssueLength: 12e3 },
-  exclude: { labels: [], users: [] },
-  features: { duplicateSearch: true, missingInfoCheck: true },
-  maxRuns: 20
-};
 function parseConfig(raw) {
   const result = configSchema.safeParse(raw ?? {});
   if (!result.success) {
@@ -31294,6 +31376,7 @@ function parseConfig(raw) {
   }
   return result.data;
 }
+var DEFAULT_CONFIG = parseConfig({});
 
 // src/config/loader.ts
 function parseBoolean(raw, name) {
@@ -31353,7 +31436,7 @@ async function readRepositoryText(octokit, owner, repo, path2, ref) {
     if (Array.isArray(data) || !("content" in data) || typeof data.content !== "string") return null;
     return Buffer.from(data.content, "base64").toString("utf8");
   } catch (error) {
-    const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+    const status = httpStatusOf(error);
     if (status === 404) return null;
     if (status > 0) throw new ArbiterFailureError(classifyHttpStatus(status, "github"));
     throw error;
@@ -31392,6 +31475,11 @@ function ensureCommentOperation(operations, config) {
     { kind: "post_comment", commentTemplate: "triage-summary", authorization: "POLICY-COMMENT" }
   ];
 }
+function finishWithoutPlan(issueNumber, reason) {
+  core3.setOutput("plan", "[]");
+  core3.setOutput("applied", "[]");
+  core3.setOutput("summary", `Issue #${issueNumber}: ${reason}`);
+}
 async function postFailureComment(owner, repo, issueNumber, githubToken, botLogin, failureClass) {
   const body = [
     FAILURE_MARKER,
@@ -31414,11 +31502,13 @@ async function run() {
   let issueNumber = 0;
   let dryRun = true;
   let botLogin = "github-actions[bot]";
+  let planEmitted = false;
   try {
     const options = loadRuntimeOptions();
     githubToken = options.githubToken;
     dryRun = options.dryRun;
     botLogin = options.botLogin;
+    core3.setOutput("dry-run", String(dryRun));
     const payload = import_github.context.payload;
     const repoInfo = import_github.context.repo;
     owner = repoInfo.owner;
@@ -31426,20 +31516,23 @@ async function run() {
     issueNumber = resolveIssueNumber(payload);
     const ref = payload.repository?.default_branch ?? "main";
     const octokit = (0, import_github.getOctokit)(githubToken);
-    const reader = new GithubAdapter(octokit, owner, repo, void 0, botLogin);
+    const github = new GithubAdapter(octokit, owner, repo, issueNumber, botLogin);
     const config = await loadRepositoryConfig(octokit, owner, repo, options.configPath, ref);
     if (!config.enabled) {
       core3.info("Repo Arbiter is disabled by repository configuration.");
+      finishWithoutPlan(issueNumber, "skipped (disabled by repository configuration).");
       return;
     }
     const policyText = options.policyPath ? await readRepositoryText(octokit, owner, repo, options.policyPath, ref) : void 0;
-    const issue = await reader.getIssue(issueNumber);
+    const issue = await github.getIssue(issueNumber);
     if (config.exclude.users.includes(issue.author)) {
       core3.info(`Skipping issue #${issueNumber}: author is excluded.`);
+      finishWithoutPlan(issueNumber, "skipped (author is excluded).");
       return;
     }
     if (issue.labels.some((label) => config.exclude.labels.includes(label))) {
       core3.info(`Skipping issue #${issueNumber}: exclude label present.`);
+      finishWithoutPlan(issueNumber, "skipped (exclude label present).");
       return;
     }
     const fingerprint = computeFingerprint({
@@ -31451,16 +31544,17 @@ async function run() {
       updatedAt: import_github.context.eventName === "issues" ? payload.issue?.updated_at : void 0
     });
     if (!options.force) {
-      const comments = await reader.listComments(issueNumber);
+      const comments = await github.listComments(issueNumber);
       if (hasFingerprintFrom(comments, fingerprint, botLogin)) {
         core3.info(`Issue #${issueNumber} already processed for this fingerprint.`);
+        finishWithoutPlan(issueNumber, "already processed for this fingerprint.");
         return;
       }
     } else {
       core3.info("force=true: skipping fingerprint check.");
     }
-    const repoLabels = await reader.listLabels();
-    const duplicateNumbers = config.features.duplicateSearch ? await reader.searchDuplicates(issueNumber, issue.title) : [];
+    const repoLabels = await github.listLabels();
+    const duplicateNumbers = config.features.duplicateSearch ? await github.searchDuplicates(issueNumber, issue.title) : [];
     const providerName = options.llmProvider ?? config.llm.provider;
     if (!options.llmApiKey && providerName !== "mock") {
       throw new ConfigError("ARBITER_LLM_API_KEY is required for non-mock providers");
@@ -31484,9 +31578,15 @@ async function run() {
       duplicateNumbers,
       maxIssueLength: config.security.maxIssueLength
     });
-    const { data: analysis, usage } = await provider.generateJson(
-      { system, user, schema: analysisJsonSchema, maxTokens: config.llm.maxTokens },
-      parseAnalysis
+    if (config.maxRuns > MAX_LLM_ATTEMPTS) {
+      core3.warning(`maxRuns=${config.maxRuns} exceeds the cap; using ${MAX_LLM_ATTEMPTS} attempts.`);
+    }
+    const { data: analysis, usage, attempts, finalUserPrompt } = await analyzeWithRetry(
+      provider,
+      { system, user, maxTokens: config.llm.maxTokens },
+      config.maxRuns,
+      parseAnalysis,
+      core3.info
     );
     const verifiedAnalysis = {
       ...analysis,
@@ -31504,13 +31604,13 @@ async function run() {
     await writeArtifact("analysis.json", verifiedAnalysis);
     await writeArtifact("operations.json", operations);
     await writeArtifact("prompt-system.md", system);
-    await writeArtifact("prompt-user.md", user);
+    await writeArtifact("prompt-user.md", finalUserPrompt);
     core3.setOutput("plan", JSON.stringify(operations));
-    core3.setOutput("dry-run", String(dryRun));
+    planEmitted = true;
     core3.info(`Planned operations:
 ${explainPlan(operations)}`);
-    core3.info(`LLM usage: input=${usage.inputTokens} output=${usage.outputTokens}`);
-    const writer = dryRun ? new DryRunWriter() : new GithubAdapter(octokit, owner, repo, issueNumber, botLogin);
+    core3.info(`LLM usage: attempts=${attempts} input=${usage.inputTokens} output=${usage.outputTokens}`);
+    const writer = dryRun ? new DryRunWriter() : github;
     const labelDescriptions = Object.fromEntries(
       config.labels.allowlist.map((label) => [label, `Classified by Repo Arbiter (${config.labels.prefix})`])
     );
@@ -31526,6 +31626,7 @@ ${explainPlan(operations)}`);
     core3.info(`Repo Arbiter completed for issue #${issueNumber}. Dry run: ${dryRun}`);
   } catch (error) {
     const failure = toArbiterFailure(error);
+    if (!planEmitted) core3.setOutput("plan", "[]");
     core3.setOutput("failure-class", failure.class_name);
     core3.setOutput("summary", failure.summary);
     if (!dryRun && owner && repo && issueNumber > 0 && githubToken) {

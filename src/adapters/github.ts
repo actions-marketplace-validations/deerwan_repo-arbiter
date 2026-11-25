@@ -1,6 +1,6 @@
 import type { getOctokit } from '@actions/github';
 import type { WritePort } from '../core/apply.js';
-import { ArbiterFailureError, classifyHttpStatus, type ArbiterFailure } from '../failures.js';
+import { ArbiterFailureError, classifyHttpStatus, httpStatusOf, type ArbiterFailure } from '../failures.js';
 import type { IssueContext, RepoComment } from '../types.js';
 
 type Octokit = ReturnType<typeof getOctokit>;
@@ -20,6 +20,9 @@ export class GithubAdapter implements GithubReadPort, WritePort {
     private readonly issueNumber?: number,
     private readonly botLogin?: string,
   ) {}
+
+  /** Labels are effectively immutable for the duration of one run; cache them so ensureLabel is not an N+1. */
+  private labelCache: string[] | null = null;
 
   private requireIssueNumber(): number {
     if (!this.issueNumber) throw new Error('GithubAdapter write methods require an issue number');
@@ -63,12 +66,15 @@ export class GithubAdapter implements GithubReadPort, WritePort {
   }
 
   async listLabels(): Promise<string[]> {
-    const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
-      owner: this.owner,
-      repo: this.repo,
-      per_page: 100,
-    });
-    return labels.map((label) => label.name);
+    if (!this.labelCache) {
+      const labels = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
+        owner: this.owner,
+        repo: this.repo,
+        per_page: 100,
+      });
+      this.labelCache = labels.map((label) => label.name);
+    }
+    return [...this.labelCache];
   }
 
   async searchDuplicates(issueNumber: number, title: string): Promise<number[]> {
@@ -85,15 +91,25 @@ export class GithubAdapter implements GithubReadPort, WritePort {
   }
 
   async ensureLabel(name: string, description: string): Promise<void> {
-    const existing = await this.listLabels();
-    if (existing.includes(name)) return;
-    await this.octokit.rest.issues.createLabel({
-      owner: this.owner,
-      repo: this.repo,
-      name,
-      description,
-      color: 'ededed',
-    });
+    if ((await this.listLabels()).includes(name)) return;
+    try {
+      await this.octokit.rest.issues.createLabel({
+        owner: this.owner,
+        repo: this.repo,
+        name,
+        description,
+        color: 'ededed',
+      });
+    } catch (error) {
+      // A concurrent run on another issue may have created this label while we
+      // waited on the LLM; GitHub answers 422 already_exists. Drop the stale cache
+      // and only accept the label as ensured if it is really there now.
+      this.labelCache = null;
+      if (httpStatusOf(error) === 422 && (await this.listLabels()).includes(name)) return;
+      throw error;
+    }
+    // Keep the cache coherent so a repeated ensureLabel for the same name cannot issue a second create.
+    this.labelCache?.push(name);
   }
 
   async addLabels(labels: string[]): Promise<void> {
@@ -148,9 +164,7 @@ export class GithubAdapter implements GithubReadPort, WritePort {
 
 export function toArbiterFailure(error: unknown): ArbiterFailure {
   if (error instanceof ArbiterFailureError) return error.failure;
-  const status = typeof error === 'object' && error !== null && 'status' in error
-    ? Number((error as { status: unknown }).status)
-    : 0;
+  const status = httpStatusOf(error);
   if (status > 0) return classifyHttpStatus(status, 'github');
   return {
     class_name: 'internal-error',

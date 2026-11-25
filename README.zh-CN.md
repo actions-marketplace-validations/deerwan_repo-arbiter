@@ -13,6 +13,7 @@ Repo Arbiter 是一个策略驱动的 GitHub AI 分流工具。核心原则是�
 - 自动判断问题分类与优先级
 - 从 allowlist 中选择并添加 `arbiter/` 命名空间标签
 - 每个 issue 只维护一条 sticky 评论，并通过隐藏 fingerprint marker 保证幂等
+- 模型返回的 JSON 未通过 schema 校验时，会附带校验错误重试，仍失败才报错
 - 支持 OpenAI-compatible、Anthropic 和 Mock 三种 provider
 - 默认开启 `dry-run: true`
 - 无数据库、无常驻服务、不会关闭 issue、改标题或合并代码
@@ -47,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: deerwan/repo-arbiter@v0.1.5
+      - uses: deerwan/repo-arbiter@v0.2.0
         with:
           dry-run: 'true'
           issue-number: ${{ inputs.issue-number }}
@@ -62,6 +63,10 @@ jobs:
 先保持 `dry-run: 'true'` 运行，确认计划结果后再切到 `dry-run: 'false'`。
 
 非 mock provider 在 dry-run 模式下也必须提供 `ARBITER_LLM_API_KEY`。
+
+## Runner 要求
+
+Action 使用 Node 24 运行时（`using: node24`）。GitHub 托管 runner 已自带；Node 20 已于 2026-09-23 从 runner 中移除。自托管 runner 需要 v2.328.0 或更新版本；Node 24 不兼容 macOS 13.4 及以下版本，也不支持 ARM32。详见 [GitHub changelog](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners)。
 
 ## 自定义 Bot 身份
 
@@ -114,10 +119,12 @@ features:
   duplicateSearch: true
   missingInfoCheck: true
 
-maxRuns: 20
+maxRuns: 3
 ```
 
 完整示例见 [`examples/arbiter.yml`](./examples/arbiter.yml)。
+
+如果模型返回的 JSON 未通过校验，Repo Arbiter 会把校验错误附在 prompt 里让它重新输出。`maxRuns` 是模型尝试次数的上限（含首次调用）；超过 3 的值会被截断到 3，避免不稳定的模型产生无上限的费用。未通过校验的响应永远不会被应用。
 
 ## 环境变量
 
@@ -157,7 +164,7 @@ maxRuns: 20
 ## 安全说明
 
 - issue 文本会被当作不可信数据，并用明确边界包裹
-- LLM 输出必须通过严格 JSON schema 和运行时校验
+- LLM 输出必须通过严格 JSON schema 和运行时校验；未通过的响应会附带校验反馈重试，永远不会被应用
 - 标签经过 allowlist 过滤；评论只渲染白名单字段
 - fingerprint 只信任配置中的 `bot-login`
 - 失败评论使用独立 marker 和固定模板
